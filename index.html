@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#081b4b">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="VM 2026">
+  <title>VM 2026 – Kampe & resultater</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Canada · Mexico · USA</p>
+        <h1>VM 2026</h1>
+      </div>
+      <button class="icon-button" id="refreshBtn" type="button" aria-label="Opdater data">
+        <span aria-hidden="true">↻</span>
+      </button>
+    </header>
+
+    <main id="app" class="content" tabindex="-1">
+      <section class="loading-card">
+        <div class="ball"></div>
+        <h2>Henter kampprogram…</h2>
+        <p>Ingen login. Ingen API-nøgle. Bare åben data.</p>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Hovedmenu">
+      <button type="button" class="nav-item active" data-view="home"><span>⌂</span><small>Overblik</small></button>
+      <button type="button" class="nav-item" data-view="matches"><span>◷</span><small>Kampe</small></button>
+      <button type="button" class="nav-item" data-view="groups"><span>▦</span><small>Grupper</small></button>
+      <button type="button" class="nav-item" data-view="knockout"><span>◇</span><small>Slutspil</small></button>
+      <button type="button" class="nav-item" data-view="favorites"><span>★</span><small>Favoritter</small></button>
+    </nav>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="app.js" defer></script>
+</body>
+</html>
