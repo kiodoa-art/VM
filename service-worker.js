@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vm2026-app-v1';
+const CACHE_NAME = 'vm2026-app-v13-preload-details-cache';
 const APP_ASSETS = [
   './',
   './index.html',
@@ -24,6 +24,11 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const request = event.request;
   if (request.method !== 'GET') return;
+
+  if (request.url.includes('api.kickoffapi.com')) {
+    event.respondWith(fetch(request));
+    return;
+  }
 
   if (request.url.includes('raw.githubusercontent.com/openfootball/worldcup.json')) {
     event.respondWith(
