@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f7f4ee" />
+  <title>VM 2026 • KickoffAPI</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <style>
+    :root{
+      --bg:#f7f4ee; --paper:#ffffff; --ink:#111827; --muted:#6b7280; --line:#e5e7eb;
+      --red:#d71920; --blue:#123c91; --gold:#c99a2e; --green:#16a34a; --amber:#f59e0b;
+      --shadow:0 10px 30px rgba(17,24,39,.10); --radius:22px;
+    }
+    *{box-sizing:border-box} body{margin:0;background:linear-gradient(180deg,#fbf8f0 0%,#eef3ff 100%);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    button,input,select{font:inherit} button{cursor:pointer;border:0;background:none;color:inherit}.hidden{display:none!important}
+    .app{min-height:100dvh;display:grid;grid-template-columns:280px 1fr}.side{position:sticky;top:0;height:100dvh;padding:22px 18px;border-right:1px solid var(--line);background:rgba(255,255,255,.74);backdrop-filter:blur(18px)}
+    .brand{display:flex;gap:12px;align-items:center;margin-bottom:24px}.cup{width:54px;height:54px;border-radius:16px;background:linear-gradient(135deg,#ffd76a,#c67a00);display:grid;place-items:center;box-shadow:var(--shadow);font-size:30px}.brand h1{margin:0;font-size:22px;line-height:1}.brand small{color:var(--muted);font-weight:700;letter-spacing:.08em}
+    .nav{display:grid;gap:8px}.nav button{display:flex;align-items:center;gap:12px;padding:13px 14px;border-radius:15px;text-align:left;font-weight:800;color:#374151}.nav button.active{background:#102a66;color:white;box-shadow:var(--shadow)}.nav button span:first-child{width:24px;text-align:center}.data-note{position:absolute;bottom:22px;left:22px;color:var(--muted);font-size:12px;line-height:1.5}
+    main{padding:26px 26px 100px;max-width:1200px;width:100%;margin:0 auto}.topbar{display:flex;gap:14px;align-items:center;justify-content:space-between;margin-bottom:18px}.topbar h2{margin:0;font-size:26px}.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pill,.primary,.ghost{border-radius:999px;padding:10px 14px;font-weight:900}.pill{background:white;border:1px solid var(--line)}.primary{background:#102a66;color:white}.ghost{background:#fff;border:1px solid var(--line)}
+    .grid{display:grid;gap:16px}.grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}.grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.card{background:rgba(255,255,255,.86);border:1px solid rgba(229,231,235,.9);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}.card.pad{padding:18px}.card h3{margin:0 0 12px;font-size:17px}.muted{color:var(--muted)}.small{font-size:12px}.section-title{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#6b7280;font-weight:950;margin:18px 0 8px}
+    .match{padding:16px;display:grid;gap:12px}.match-head{display:flex;justify-content:space-between;gap:10px;color:var(--muted);font-weight:800;font-size:13px}.score-row{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:16px}.team{display:flex;align-items:center;gap:10px;font-weight:950}.team.away{justify-content:flex-end}.flag{width:38px;height:28px;border-radius:7px;object-fit:cover;background:#f3f4f6;border:1px solid #e5e7eb}.score{font-size:32px;font-weight:1000;letter-spacing:.04em;white-space:nowrap}.status{font-weight:950;color:#102a66}.match:hover{transform:translateY(-1px)}
+    .hero{padding:20px;background:linear-gradient(135deg,#ffffff,#eff6ff);border-radius:var(--radius);border:1px solid var(--line);box-shadow:var(--shadow)}.hero-main{display:grid;grid-template-columns:1fr auto 1fr;gap:14px;align-items:center;text-align:center}.hero .team{display:grid;justify-items:center;font-size:19px}.hero .flag{width:76px;height:54px;border-radius:12px}.hero .score{font-size:48px}.tabs{display:flex;gap:8px;overflow:auto;padding:12px 0 0}.tabs button{padding:11px 14px;border-radius:999px;background:#eef2ff;font-weight:950;white-space:nowrap}.tabs button.active{background:#102a66;color:white}
+    .event-list{display:grid;gap:1px}.event-row{display:grid;grid-template-columns:54px 28px 1fr;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line)}.icon-goal{color:var(--green)}.icon-card{display:inline-block;width:12px;height:16px;border-radius:2px;background:#facc15}.icon-red{background:#dc2626}.sub-in{color:var(--green);font-weight:950}.sub-out{color:#dc2626;font-weight:950}.stat-row{display:grid;grid-template-columns:46px 1fr 46px;gap:10px;align-items:center;margin:12px 0}.bar{height:9px;background:#e5e7eb;border-radius:999px;overflow:hidden;display:flex}.bar i:first-child{background:var(--red)}.bar i:last-child{background:var(--blue)}
+    .pitch{position:relative;aspect-ratio:1.78;background:linear-gradient(90deg,#4d8f36,#3f812e);border-radius:18px;border:5px solid rgba(255,255,255,.45);overflow:hidden;box-shadow:inset 0 0 0 2px rgba(255,255,255,.35)}.pitch:before{content:"";position:absolute;inset:0;background:repeating-linear-gradient(90deg,rgba(255,255,255,.05) 0 60px,rgba(0,0,0,.04) 60px 120px)}.midline{position:absolute;left:50%;top:0;bottom:0;width:2px;background:rgba(255,255,255,.45)}.circle{position:absolute;left:50%;top:50%;width:90px;height:90px;transform:translate(-50%,-50%);border:2px solid rgba(255,255,255,.45);border-radius:50%}.player{position:absolute;transform:translate(-50%,-50%);display:grid;justify-items:center;gap:3px;width:80px;text-align:center;font-size:11px;color:white;text-shadow:0 1px 2px rgba(0,0,0,.65)}.shirt{width:34px;height:30px;border-radius:9px 9px 12px 12px;display:grid;place-items:center;font-weight:1000;color:white;box-shadow:0 4px 10px rgba(0,0,0,.25)}.home-shirt{background:var(--red)}.away-shirt{background:var(--blue)}.keeper{background:#16a34a}.away-keeper{background:#f5b400;color:#111}.bench{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:12px}.bench ul{margin:0;padding-left:18px;columns:2}.bench li{margin:5px 0;font-size:13px}
+    .table{width:100%;border-collapse:collapse}.table th,.table td{padding:10px;border-bottom:1px solid var(--line);text-align:left;font-size:14px}.table th{font-size:12px;text-transform:uppercase;color:var(--muted)}.team-logo{width:26px;height:26px;object-fit:contain;vertical-align:middle;margin-right:8px}.error{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;padding:13px;border-radius:15px}.empty{padding:22px;text-align:center;color:var(--muted)}
+    .bottom{display:none;position:fixed;left:0;right:0;bottom:0;background:rgba(255,255,255,.92);backdrop-filter:blur(16px);border-top:1px solid var(--line);padding:7px 8px calc(7px + env(safe-area-inset-bottom));z-index:30}.bottom button{flex:1;display:grid;gap:3px;place-items:center;padding:7px 4px;border-radius:14px;color:#6b7280;font-size:11px;font-weight:900}.bottom button.active{background:#102a66;color:white}.bottom .ico{font-size:20px}
+    @media(max-width:860px){.app{display:block}.side{display:none}main{padding:16px 12px 92px}.bottom{display:flex}.grid.two,.grid.three{grid-template-columns:1fr}.topbar{align-items:flex-start}.topbar h2{font-size:22px}.actions{justify-content:flex-end}.hero-main{grid-template-columns:1fr;gap:12px}.hero .score{font-size:42px}.pitch{aspect-ratio:.72}.player{font-size:10px;width:58px}.shirt{width:30px;height:27px}.bench{grid-template-columns:1fr}.bench ul{columns:1}.score-row{grid-template-columns:1fr auto 1fr;gap:8px}.team{font-size:13px}.flag{width:32px;height:23px}.score{font-size:24px}.card.pad{padding:14px}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><div class="cup">🏆</div><div><h1>WORLD<br>CUP 2026</h1><small>KICKOFFAPI</small></div></div>
+    <nav class="nav" id="sideNav"></nav>
+    <div class="data-note">Data leveret af<br><b>KickoffAPI</b><br><span id="quotaNote"></span></div>
+  </aside>
+  <main>
+    <div class="topbar"><h2 id="pageTitle">Oversigt</h2><div class="actions"><button class="ghost" id="refreshBtn">↻ Opdater</button><button class="pill" id="installBtn" hidden>Installer</button></div></div>
+    <div id="notice"></div>
+    <div id="view"></div>
+  </main>
+</div>
+<nav class="bottom" id="bottomNav"></nav>
+<script>
+const API_KEY = 'ft_kiodoa_2f917696298d3baa5ac9f9eb9dcb33200a4275de';
+const BASE = 'https://api.kickoffapi.com/api/v1';
+const CACHE_VERSION = 'fresh-v1-no-demo';
+const WORLD_CUP_LEAGUE_ID = ''; // udfyld evt. manuelt i Indstillinger, hvis API'et kræver league-id
+const SEASON = '2026';
+const navItems = [
+  ['overview','⌂','Oversigt'],['matches','▣','Kampe'],['groups','☷','Grupper'],['teams','●','Hold'],['stadiums','◉','Stadions'],['favorites','★','Favoritter'],['settings','⚙','Indstillinger']
+];
+const state = { view:'overview', fixtures:[], teams:[], standings:[], venues:[], selected:null, detailTab:'overview', loading:false, error:'', favorites:new Set(JSON.parse(localStorage.getItem('favorites')||'[]')), settings: JSON.parse(localStorage.getItem('settings')||'{}') };
+const $ = s => document.querySelector(s);
+function saveSettings(){localStorage.setItem('settings', JSON.stringify(state.settings));}
+function favSave(){localStorage.setItem('favorites', JSON.stringify([...state.favorites]));}
+function esc(v){return String(v??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
+function get(obj,path,def=''){return path.split('.').reduce((o,k)=>o?.[k],obj) ?? def;}
+function normList(json){return Array.isArray(json?.response)?json.response:Array.isArray(json)?json:[];}
+function flag(team){return team?.logo || team?.flag || get(team,'team.logo') || ''}
+function teamName(t){return t?.name || t?.team?.name || t || 'Ukendt'}
+function fixtureId(f){return get(f,'fixture.id') || f.id || f.fixture_id;}
+function dt(f){const raw=get(f,'fixture.date')||f.date||f.kickoff||f.timestamp; const d=raw?new Date(raw):null; return d && !isNaN(d)?d:null;}
+function dateText(f){const d=dt(f); return d?d.toLocaleString('da-DK',{dateStyle:'medium',timeStyle:'short'}):'Dato ukendt'}
+function status(f){return get(f,'fixture.status.short')||get(f,'fixture.status')||f.status||''}
+function isFinished(f){return ['FT','AET','PEN'].includes(status(f));}
+function score(f){const h=get(f,'goals.home'); const a=get(f,'goals.away'); return `${h??'-'} - ${a??'-'}`}
+function home(f){return get(f,'teams.home')||f.home||{name:'Hjemmehold'}} function away(f){return get(f,'teams.away')||f.away||{name:'Udehold'}}
+async function api(path, params={}, ttl=10*60*1000){
+  const url = new URL(BASE + path);
+  Object.entries(params).forEach(([k,v])=>{ if(v!==undefined && v!==null && v!=='') url.searchParams.set(k,v); });
+  const key = CACHE_VERSION+':'+url.toString();
+  const cached = JSON.parse(localStorage.getItem(key)||'null');
+  if(cached && Date.now()-cached.t < ttl) return cached.data;
+  const res = await fetch(url, {headers:{'x-api-key':API_KEY, 'Accept':'application/json'}});
+  $('#quotaNote').textContent = res.headers.get('x-ratelimit-remaining') ? `Kald tilbage: ${res.headers.get('x-ratelimit-remaining')}` : '';
+  const text = await res.text(); let data; try{data=JSON.parse(text)}catch{data={raw:text}}
+  if(!res.ok) throw new Error(`API-fejl ${res.status}: ${data?.message || data?.error || text.slice(0,120)}`);
+  if(data?.errors && Object.keys(data.errors).length) throw new Error('API-fejl: '+JSON.stringify(data.errors));
+  localStorage.setItem(key, JSON.stringify({t:Date.now(),data})); return data;
+}
+function fixtureParams(extra={}){const league=state.settings.leagueId||WORLD_CUP_LEAGUE_ID; return {...(league?{league}:{}), season:state.settings.season||SEASON, ...extra};}
+async function loadCore(force=false){
+  if(force){Object.keys(localStorage).filter(k=>k.startsWith(CACHE_VERSION+':')).forEach(k=>localStorage.removeItem(k));}
+  state.loading=true; render();
+  try{
+    const today = new Date(); const from = new Date(today); from.setDate(from.getDate()-7); const to = new Date(today); to.setDate(to.getDate()+30);
+    const [fx, st, tm, vn] = await Promise.allSettled([
+      api('/fixtures', fixtureParams({from:from.toISOString().slice(0,10), to:to.toISOString().slice(0,10)}), 2*60*1000),
+      api('/standings', fixtureParams(), 30*60*1000),
+      api('/teams', fixtureParams(), 24*60*60*1000),
+      api('/venues', {}, 24*60*60*1000)
+    ]);
+    state.fixtures = fx.status==='fulfilled'?normList(fx.value):[];
+    state.standings = st.status==='fulfilled'?normList(st.value):[];
+    state.teams = tm.status==='fulfilled'?normList(tm.value):[];
+    state.venues = vn.status==='fulfilled'?normList(vn.value):[];
+    state.error = fx.status==='rejected'?fx.reason.message:'';
+  } catch(e){ state.error=e.message; }
+  state.loading=false; render();
+}
+async function loadDetail(f){
+  state.selected={fixture:f, events:null, lineups:null, stats:null, errors:[]}; render();
+  const id=fixtureId(f); const calls=[['events','/fixtures/'+id+'/events'],['lineups','/fixtures/'+id+'/lineups'],['stats','/fixtures/'+id+'/statistics']];
+  await Promise.all(calls.map(async ([k,p])=>{try{state.selected[k]=normList(await api(p,{},60*1000));}catch(e){state.selected.errors.push(k+': '+e.message); state.selected[k]=[];}}));
+  render();
+}
+function setView(v){state.view=v; state.selected=null; render(); if(!state.fixtures.length && v!=='settings') loadCore();}
+function renderNav(){const html=navItems.map(([id,ico,label])=>`<button class="${state.view===id?'active':''}" onclick="setView('${id}')"><span>${ico}</span><span>${label}</span></button>`).join(''); $('#sideNav').innerHTML=html; $('#bottomNav').innerHTML=navItems.slice(0,5).map(([id,ico,label])=>`<button class="${state.view===id?'active':''}" onclick="setView('${id}')"><span class="ico">${ico}</span><span>${label}</span></button>`).join('');}
+function render(){renderNav(); $('#pageTitle').textContent = state.selected?'Kampdetaljer':(navItems.find(x=>x[0]===state.view)?.[2]||'VM 2026'); $('#notice').innerHTML=state.error?`<div class="error"><b>Der er et API-problem:</b><br>${esc(state.error)}<br><span class="small">Tjek league-id/season under Indstillinger, hvis listen er tom.</span></div><br>`:''; if(state.loading){$('#view').innerHTML='<div class="empty">Henter live-data fra KickoffAPI…</div>'; return;} if(state.selected) return renderDetail(); const map={overview, matches, groups, teams, stadiums, favorites, settings}; $('#view').innerHTML=(map[state.view]||overview)();}
+function matchCard(f){const id=fixtureId(f); const h=home(f), a=away(f); const fav=state.favorites.has(String(id)); return `<div class="card match" onclick="loadDetail(state.fixtures.find(x=>String(fixtureId(x))==='${id}'))"><div class="match-head"><span>${esc(get(f,'league.round')||get(f,'league.name')||'VM 2026')}</span><span class="status">${esc(status(f)||'Planlagt')}</span></div><div class="score-row"><div class="team"><img class="flag" src="${flag(h)}" onerror="this.style.display='none'">${esc(teamName(h))}</div><div class="score">${score(f)}</div><div class="team away">${esc(teamName(a))}<img class="flag" src="${flag(a)}" onerror="this.style.display='none'"></div></div><div class="match-head"><span>${dateText(f)}</span><button onclick="event.stopPropagation();toggleFav('${id}')">${fav?'★':'☆'}</button></div></div>`}
+function toggleFav(id){state.favorites.has(String(id))?state.favorites.delete(String(id)):state.favorites.add(String(id)); favSave(); render();}
+function overview(){const sorted=[...state.fixtures].sort((a,b)=>(dt(a)||0)-(dt(b)||0)); const live=sorted.filter(f=>!isFinished(f)&&status(f)&&status(f)!=='NS').slice(0,4); const next=sorted.filter(f=>(dt(f)||0)>new Date()).slice(0,6); const done=sorted.filter(isFinished).slice(-4).reverse(); return `<div class="grid"><div class="hero"><h3>VM 2026</h3><p class="muted">Lys mobilapp med rigtige KickoffAPI-kald. Ingen demodata. Ingen fake fallback.</p><div class="grid three"><div><b>${state.fixtures.length}</b><br><span class="muted small">kampe hentet</span></div><div><b>${state.teams.length}</b><br><span class="muted small">hold hentet</span></div><div><b>${state.standings.length}</b><br><span class="muted small">standing-rækker</span></div></div></div><div><div class="section-title">Live / igang</div><div class="grid two">${(live.length?live:next.slice(0,2)).map(matchCard).join('')||'<div class="card empty">Ingen kampe hentet</div>'}</div></div><div><div class="section-title">Næste kampe</div><div class="grid two">${next.map(matchCard).join('')||'<div class="card empty">Ingen kommende kampe</div>'}</div></div><div><div class="section-title">Seneste resultater</div><div class="grid two">${done.map(matchCard).join('')||'<div class="card empty">Ingen resultater endnu</div>'}</div></div></div>`}
+function matches(){const grouped={}; [...state.fixtures].sort((a,b)=>(dt(a)||0)-(dt(b)||0)).forEach(f=>{const d=dt(f); const k=d?d.toLocaleDateString('da-DK',{weekday:'long',day:'numeric',month:'long'}):'Uden dato'; (grouped[k]??=[]).push(f)}); return Object.entries(grouped).map(([d,list])=>`<div class="section-title">${d}</div><div class="grid two">${list.map(matchCard).join('')}</div>`).join('')||'<div class="empty">Ingen kampe. Tjek league-id/season.</div>'}
+function groups(){let rows=[]; state.standings.forEach(g=>{if(Array.isArray(g.league?.standings)) g.league.standings.flat().forEach(r=>rows.push({...r,group:r.group||g.league?.round||''})); else if(Array.isArray(g)) rows.push(...g);}); if(!rows.length) return '<div class="card empty">Ingen stillinger hentet. Standings endpoint kræver sandsynligvis korrekt league-id og season.</div>'; const groups={}; rows.forEach(r=>(groups[r.group||'Gruppe']??=[]).push(r)); return Object.entries(groups).map(([g,list])=>`<div class="card pad"><h3>${esc(g)}</h3><table class="table"><tr><th>#</th><th>Hold</th><th>P</th><th>M</th><th>V</th><th>U</th><th>T</th><th>MF</th></tr>${list.map(r=>`<tr><td>${r.rank??''}</td><td><img class="team-logo" src="${flag(r.team)}" onerror="this.style.display='none'">${esc(teamName(r.team))}</td><td><b>${r.points??''}</b></td><td>${r.all?.played??''}</td><td>${r.all?.win??''}</td><td>${r.all?.draw??''}</td><td>${r.all?.lose??''}</td><td>${r.goalsDiff??''}</td></tr>`).join('')}</table></div>`).join('<br>')}
+function teams(){return `<div class="grid three">${state.teams.map(t=>{const x=t.team||t;return `<div class="card pad"><img class="team-logo" src="${flag(x)}" onerror="this.style.display='none'"><b>${esc(teamName(x))}</b><br><span class="muted small">${esc(x.country||'')}</span></div>`}).join('')||'<div class="card empty">Ingen hold hentet.</div>'}</div>`}
+function stadiums(){return `<div class="grid two">${state.venues.slice(0,60).map(v=>{v=v.venue||v;return `<div class="card pad"><h3>${esc(v.name||'Stadion')}</h3><div class="muted">${esc(v.city||'')} ${v.capacity?'• '+v.capacity.toLocaleString('da-DK')+' pladser':''}</div></div>`}).join('')||'<div class="card empty">Ingen stadions hentet.</div>'}</div>`}
+function favorites(){const list=state.fixtures.filter(f=>state.favorites.has(String(fixtureId(f)))); return `<div class="grid two">${list.map(matchCard).join('')||'<div class="card empty">Ingen favoritter endnu.</div>'}</div>`}
+function settings(){return `<div class="card pad"><h3>API-indstillinger</h3><p class="muted">API-key er hardcoded i filen. Her kan du rette league-id/season uden at ændre kode, hvis KickoffAPI kræver det for VM.</p><label>League-id<br><input class="pill" style="width:100%" id="leagueInput" value="${esc(state.settings.leagueId||'')}" placeholder="fx VM 2026 league id"></label><br><br><label>Season<br><input class="pill" style="width:100%" id="seasonInput" value="${esc(state.settings.season||SEASON)}"></label><br><br><button class="primary" onclick="state.settings.leagueId=$('#leagueInput').value.trim();state.settings.season=$('#seasonInput').value.trim()||'2026';saveSettings();loadCore(true)">Gem og hent igen</button> <button class="ghost" onclick="localStorage.clear();location.reload()">Ryd cache helt</button></div>`}
+function renderDetail(){const s=state.selected, f=s.fixture, h=home(f), a=away(f); const tabs=['overview','Opstillinger','Statistik','Kampforløb']; return `<button class="ghost" onclick="state.selected=null;render()">← Tilbage</button><br><br><section class="hero"><div class="hero-main"><div class="team"><img class="flag" src="${flag(h)}" onerror="this.style.display='none'"><span>${esc(teamName(h))}</span></div><div><div class="muted small">${esc(get(f,'league.round')||'VM 2026')}</div><div class="muted small">${dateText(f)}</div><div class="score">${score(f)}</div><div class="status">${esc(status(f)||'')}</div></div><div class="team"><img class="flag" src="${flag(a)}" onerror="this.style.display='none'"><span>${esc(teamName(a))}</span></div></div><div class="tabs">${tabs.map((t,i)=>`<button class="${state.detailTab===(i?t.toLowerCase():'overview')?'active':''}" onclick="state.detailTab='${i?t.toLowerCase():'overview'}';render()">${t}</button>`).join('')}</div></section><br>${detailContent()}`}
+function detailContent(){const tab=state.detailTab, s=state.selected; if(tab==='opstillinger') return lineupsHtml(s.lineups||[]); if(tab==='statistik') return statsHtml(s.stats||[]); if(tab==='kampforløb') return eventsTimeline(s.events||[]); return `<div class="grid two"><div class="card pad"><h3>${esc(teamName(home(s.fixture)))}</h3>${eventsFor(home(s.fixture),s.events||[])}</div><div class="card pad"><h3>${esc(teamName(away(s.fixture)))}</h3>${eventsFor(away(s.fixture),s.events||[])}</div></div><br>${lineupsHtml(s.lineups||[],true)}<br>${statsHtml(s.stats||[],true)}`}
+function eventsFor(team,events){const name=teamName(team); const list=events.filter(e=>teamName(e.team)===name); return list.length?`<div class="event-list">${list.map(eventRow).join('')}</div>`:'<div class="muted">Ingen events registreret.</div>'}
+function eventRow(e){let icon='•'; if(/goal/i.test(e.type||'')) icon='<span class="icon-goal">⚽</span>'; if(/Card/i.test(e.type||'')) icon=`<span class="icon-card ${/red/i.test(e.detail||'')?'icon-red':''}"></span>`; if(/subst/i.test(e.type||'')) icon='<span class="sub-in">↑</span>'; return `<div class="event-row"><b>${e.time?.elapsed??''}'</b><span>${icon}</span><span>${esc(e.player?.name||e.detail||e.type||'')} <span class="muted small">${esc(e.assist?.name||'')}</span></span></div>`}
+function eventsTimeline(events){return `<div class="card pad"><h3>Kampforløb</h3>${events.length?events.sort((a,b)=>(a.time?.elapsed||0)-(b.time?.elapsed||0)).map(eventRow).join(''):'<div class="muted">Ingen kamp-events hentet.</div>'}</div>`}
+function lineupsHtml(lineups,compact=false){if(!lineups?.length) return compact?'':'<div class="card empty">Ingen opstillinger hentet endnu.</div>'; const homeL=lineups[0], awayL=lineups[1]; return `<div class="card pad"><h3>Opstillinger</h3><div class="pitch"><div class="midline"></div><div class="circle"></div>${playersOnPitch(homeL,'home').join('')}${playersOnPitch(awayL,'away').join('')}</div><div class="bench"><div><b>Træner: ${esc(homeL.coach?.name||'')}</b><ul>${(homeL.substitutes||[]).map(p=>`<li>${esc(p.player?.number||'')} ${esc(p.player?.name||'')}</li>`).join('')}</ul></div><div><b>Træner: ${esc(awayL?.coach?.name||'')}</b><ul>${(awayL?.substitutes||[]).map(p=>`<li>${esc(p.player?.number||'')} ${esc(p.player?.name||'')}</li>`).join('')}</ul></div></div></div>`}
+function playersOnPitch(l,side){if(!l) return []; const xi=l.startXI||l.start_xi||[]; const form=(l.formation||'4-3-3').split('-').map(Number); const rows=[1,...form]; const out=[]; let idx=0; rows.forEach((count,r)=>{for(let c=0;c<count;c++){const p=xi[idx++]?.player||{}; const x = side==='home' ? 8 + r*(38/(rows.length-1||1)) : 92 - r*(38/(rows.length-1||1)); const y = ((c+1)/(count+1))*86+7; const cls=r===0?(side==='home'?'keeper':'away-keeper'):(side==='home'?'home-shirt':'away-shirt'); out.push(`<div class="player" style="left:${x}%;top:${y}%"><div class="shirt ${cls}">${esc(p.number||'')}</div><b>${esc((p.name||'').split(' ').slice(-2).join(' '))}</b></div>`)}}); return out;}
+function statsHtml(stats,compact=false){if(!stats?.length) return compact?'':'<div class="card empty">Ingen statistik hentet.</div>'; const a=stats[0], b=stats[1]; const list=(a.statistics||[]).map((s,i)=>[s.type,s.value,b?.statistics?.[i]?.value]); return `<div class="card pad"><h3>Kampstatistik</h3>${list.map(([name,hv,av])=>statRow(name,hv,av)).join('')}</div>`}
+function num(v){if(v==null)return 0; return Number(String(v).replace('%',''))||0} function statRow(name,hv,av){const h=num(hv), a=num(av), tot=h+a||1; return `<div class="stat-row"><b>${esc(hv??'-')}</b><div><div class="small muted" style="text-align:center">${esc(name)}</div><div class="bar"><i style="width:${h/tot*100}%"></i><i style="width:${a/tot*100}%"></i></div></div><b style="text-align:right">${esc(av??'-')}</b></div>`}
+$('#refreshBtn').onclick=()=>loadCore(true);
+let deferredPrompt; window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;$('#installBtn').hidden=false}); $('#installBtn').onclick=()=>deferredPrompt?.prompt();
+if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+render(); loadCore();
+</script>
+</body>
+</html>
