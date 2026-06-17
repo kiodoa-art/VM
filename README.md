@@ -1,29 +1,18 @@
-# VM 2026 – Kampe & resultater
+# VM 2026 app – KickoffAPI v11
 
-Statisk PWA/webapp til VM 2026 i Canada, Mexico og USA.
+Rettet udgave baseret på `VM-main-kickoffapi-v10-reviewed`.
 
-## Hvad den gør
+Ændringer i v11:
 
-- Henter kampprogram/resultater fra OpenFootball `worldcup.json`
-- Kræver ingen API-nøgle
-- Viser tider i dansk tid
-- Har overblik, kampe, grupper, slutspil og favoritter
-- Kan installeres på telefon som PWA
-- Gemmer seneste hentede data lokalt som cache
+- `kickoffGet()` er kontrolleret og findes nu korrekt i `app.js`.
+- Authentication følger KickoffAPI-dokumentationen: `x-api-key` header.
+- Fixture-detaljer bruger nu de korrekte REST-stier:
+  - `/api/v1/fixtures/:id/events`
+  - `/api/v1/fixtures/:id/statistics`
+  - `/api/v1/fixtures/:id/lineups`
+- Appen behandler ikke længere et almindeligt `message`-felt som en API-fejl.
+- Detalje-cache er nulstillet til v11, så gamle tomme/fejlede details ikke genbruges.
+- Ekstra kampdata hentes kun for kampe hvor det giver mening, så API-budgettet ikke spildes på planlagte kampe langt ude i fremtiden.
+- Opstillingsmatch på hold-id er forbedret.
 
-## Vigtigt
-
-Dette er ikke livescore. Resultater vises først, når den åbne datakilde bliver opdateret.
-
-## Upload til GitHub Pages
-
-1. Pak zip-filen ud.
-2. Upload alle filerne til et GitHub repository.
-3. Gå til Settings → Pages.
-4. Vælg branch `main` og root-folder.
-5. Åbn GitHub Pages-linket på mobilen.
-6. Tilføj siden til hjemmeskærmen.
-
-## Datakilde
-
-https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json
+Upload hele mappen til GitHub Pages.
