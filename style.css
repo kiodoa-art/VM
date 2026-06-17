@@ -1033,3 +1033,40 @@ body.modal-open { overflow: hidden; }
   .player-avatar { width: 46px; height: 46px; }
   .player-name { font-size: .7rem; }
 }
+
+/* v14-pro: real tab panels and cache-safe mobile detail UI */
+.detail-tabbar button,
+.detail-tabbar .detail-tab {
+  position: relative;
+  flex: 0 0 auto;
+  appearance: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #8e929b;
+  padding: 18px 0 16px;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 950;
+  cursor: pointer;
+}
+.detail-tabbar button.active,
+.detail-tabbar .detail-tab.active { color: #20242d; }
+.detail-tabbar button.active::after,
+.detail-tabbar .detail-tab.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 5px;
+  border-radius: 999px 999px 0 0;
+  background: #20242d;
+}
+.detail-panel { display: none; }
+.detail-panel.active { display: block; }
+.data-note.error { color: #7d2b3a; background: rgba(255,255,255,.75); border: 1px solid rgba(125,43,58,.18); }
+.data-note.error summary { cursor: pointer; font-weight: 900; }
+.api-actions .danger { color: #b42336; }
+.match-modal-mobile { width: min(760px, 100%); }
+.mobile-card-panel.empty-mobile-panel { min-height: 92px; }
