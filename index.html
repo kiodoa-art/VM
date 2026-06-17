@@ -45,8 +45,8 @@
 <script>
 const API_KEY = 'ft_kiodoa_2f917696298d3baa5ac9f9eb9dcb33200a4275de';
 const BASE = 'https://api.kickoffapi.com/api/v1';
-const CACHE_VERSION = 'fresh-v1-no-demo';
-const WORLD_CUP_LEAGUE_ID = '1'; // udfyld evt. manuelt i Indstillinger, hvis API'et kræver league-id
+const CACHE_VERSION = 'vm2026-kickoffapi-real-v3';
+const WORLD_CUP_LEAGUE_ID = '1';
 const SEASON = '2026';
 const navItems = [
   ['overview','⌂','Oversigt'],['matches','▣','Kampe'],['groups','☷','Grupper'],['teams','●','Hold'],['stadiums','◉','Stadions'],['favorites','★','Favoritter'],['settings','⚙','Indstillinger']
@@ -57,16 +57,36 @@ function saveSettings(){localStorage.setItem('settings', JSON.stringify(state.se
 function favSave(){localStorage.setItem('favorites', JSON.stringify([...state.favorites]));}
 function esc(v){return String(v??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
 function get(obj,path,def=''){return path.split('.').reduce((o,k)=>o?.[k],obj) ?? def;}
-function normList(json){return Array.isArray(json?.response)?json.response:Array.isArray(json)?json:[];}
+function normList(json){
+  if(Array.isArray(json?.response)) return json.response;
+  if(Array.isArray(json?.data)) return json.data;
+  if(Array.isArray(json?.fixtures)) return json.fixtures;
+  if(Array.isArray(json)) return json;
+  return [];
+}
 function flag(team){return team?.logo || team?.flag || get(team,'team.logo') || ''}
 function teamName(t){return t?.name || t?.team?.name || t || 'Ukendt'}
-function fixtureId(f){return get(f,'fixture.id') || f.id || f.fixture_id;}
-function dt(f){const raw=get(f,'fixture.date')||f.date||f.kickoff||f.timestamp; const d=raw?new Date(raw):null; return d && !isNaN(d)?d:null;}
+function fixtureId(f){return f.id || f.fixtureId || get(f,'fixture.id') || f.fixture_id;}
+function dt(f){
+  const raw = f.date || get(f,'fixture.date') || f.kickoff;
+  if(raw){ const d=new Date(raw); if(!isNaN(d)) return d; }
+  const ts = f.timestamp || get(f,'fixture.timestamp');
+  if(ts){ const d=new Date(Number(ts)*1000); if(!isNaN(d)) return d; }
+  return null;
+}
 function dateText(f){const d=dt(f); return d?d.toLocaleString('da-DK',{dateStyle:'medium',timeStyle:'short'}):'Dato ukendt'}
-function status(f){return get(f,'fixture.status.short')||get(f,'fixture.status')||f.status||''}
+function status(f){return f.statusShort || get(f,'fixture.status.short') || get(f,'fixture.status') || f.status || ''}
 function isFinished(f){return ['FT','AET','PEN'].includes(status(f));}
-function score(f){const h=get(f,'goals.home'); const a=get(f,'goals.away'); return `${h??'-'} - ${a??'-'}`}
-function home(f){return get(f,'teams.home')||f.home||{name:'Hjemmehold'}} function away(f){return get(f,'teams.away')||f.away||{name:'Udehold'}}
+function score(f){
+  const h = f.goalsHome ?? f.scoreFullHome ?? get(f,'goals.home');
+  const a = f.goalsAway ?? f.scoreFullAway ?? get(f,'goals.away');
+  return `${h??'-'} - ${a??'-'}`;
+}
+function home(f){return f.homeTeam || get(f,'teams.home') || f.home || {name:'Hjemmehold', logo:''}}
+function away(f){return f.awayTeam || get(f,'teams.away') || f.away || {name:'Udehold', logo:''}}
+function venueOf(f){return f.venue || get(f,'fixture.venue') || {}}
+function deriveTeams(fixtures){const m=new Map(); fixtures.forEach(f=>[home(f),away(f)].forEach(t=>{const id=t.id||t.teamId||t.name; if(id&&!m.has(id))m.set(id,{team:t});})); return [...m.values()].sort((a,b)=>teamName(a.team).localeCompare(teamName(b.team),'da'));}
+function deriveVenues(fixtures){const m=new Map(); fixtures.forEach(f=>{const v=venueOf(f); const id=v.id||v.name; if(id&&!m.has(id))m.set(id,{venue:v});}); return [...m.values()].sort((a,b)=>(a.venue.name||'').localeCompare(b.venue.name||'','da'));}
 async function api(path, params={}, ttl=10*60*1000){
   const url = new URL(BASE + path);
   Object.entries(params).forEach(([k,v])=>{ if(v!==undefined && v!==null && v!=='') url.searchParams.set(k,v); });
@@ -80,44 +100,46 @@ async function api(path, params={}, ttl=10*60*1000){
   if(data?.errors && Object.keys(data.errors).length) throw new Error('API-fejl: '+JSON.stringify(data.errors));
   localStorage.setItem(key, JSON.stringify({t:Date.now(),data})); return data;
 }
-function fixtureParams(extra={}){const league=state.settings.leagueId||WORLD_CUP_LEAGUE_ID; return {...(league?{league}:{}), season:state.settings.season||SEASON, ...extra};}
+function fixtureParams(extra={}){return {league:WORLD_CUP_LEAGUE_ID, season:SEASON, ...extra};}
 async function loadCore(force=false){
   if(force){Object.keys(localStorage).filter(k=>k.startsWith(CACHE_VERSION+':')).forEach(k=>localStorage.removeItem(k));}
   state.loading=true; render();
   try{
-    const today = new Date(); const from = new Date(today); from.setDate(from.getDate()-7); const to = new Date(today); to.setDate(to.getDate()+30);
-    const [fx, st, tm, vn] = await Promise.allSettled([
-      api('/fixtures', fixtureParams({from:from.toISOString().slice(0,10), to:to.toISOString().slice(0,10)}), 2*60*1000),
-      api('/standings', fixtureParams(), 30*60*1000),
-      api('/teams', fixtureParams(), 24*60*60*1000),
-      api('/venues', {}, 24*60*60*1000)
+    const [fx, st] = await Promise.allSettled([
+      api('/fixtures', fixtureParams(), 2*60*1000),
+      api('/standings', fixtureParams(), 30*60*1000)
     ]);
     state.fixtures = fx.status==='fulfilled'?normList(fx.value):[];
     state.standings = st.status==='fulfilled'?normList(st.value):[];
-    state.teams = tm.status==='fulfilled'?normList(tm.value):[];
-    state.venues = vn.status==='fulfilled'?normList(vn.value):[];
+    state.teams = deriveTeams(state.fixtures);
+    state.venues = deriveVenues(state.fixtures);
     state.error = fx.status==='rejected'?fx.reason.message:'';
   } catch(e){ state.error=e.message; }
   state.loading=false; render();
 }
 async function loadDetail(f){
   state.selected={fixture:f, events:null, lineups:null, stats:null, errors:[]}; render();
-  const id=fixtureId(f); const calls=[['events','/fixtures/'+id+'/events'],['lineups','/fixtures/'+id+'/lineups'],['stats','/fixtures/'+id+'/statistics']];
-  await Promise.all(calls.map(async ([k,p])=>{try{state.selected[k]=normList(await api(p,{},60*1000));}catch(e){state.selected.errors.push(k+': '+e.message); state.selected[k]=[];}}));
+  const id=fixtureId(f);
+  const calls=[
+    ['events','/fixtures/events',{fixture:id}],
+    ['lineups','/fixtures/lineups',{fixture:id}],
+    ['stats','/fixtures/statistics',{fixture:id}]
+  ];
+  await Promise.all(calls.map(async ([k,p,params])=>{try{state.selected[k]=normList(await api(p,params,60*1000));}catch(e){state.selected.errors.push(k+': '+e.message); state.selected[k]=[];}}));
   render();
 }
 function setView(v){state.view=v; state.selected=null; render(); if(!state.fixtures.length && v!=='settings') loadCore();}
 function renderNav(){const html=navItems.map(([id,ico,label])=>`<button class="${state.view===id?'active':''}" onclick="setView('${id}')"><span>${ico}</span><span>${label}</span></button>`).join(''); $('#sideNav').innerHTML=html; $('#bottomNav').innerHTML=navItems.slice(0,5).map(([id,ico,label])=>`<button class="${state.view===id?'active':''}" onclick="setView('${id}')"><span class="ico">${ico}</span><span>${label}</span></button>`).join('');}
-function render(){renderNav(); $('#pageTitle').textContent = state.selected?'Kampdetaljer':(navItems.find(x=>x[0]===state.view)?.[2]||'VM 2026'); $('#notice').innerHTML=state.error?`<div class="error"><b>Der er et API-problem:</b><br>${esc(state.error)}<br><span class="small">Tjek league-id/season under Indstillinger, hvis listen er tom.</span></div><br>`:''; if(state.loading){$('#view').innerHTML='<div class="empty">Henter live-data fra KickoffAPI…</div>'; return;} if(state.selected) return renderDetail(); const map={overview, matches, groups, teams, stadiums, favorites, settings}; $('#view').innerHTML=(map[state.view]||overview)();}
+function render(){renderNav(); $('#pageTitle').textContent = state.selected?'Kampdetaljer':(navItems.find(x=>x[0]===state.view)?.[2]||'VM 2026'); $('#notice').innerHTML=state.error?`<div class="error"><b>Der er et API-problem:</b><br>${esc(state.error)}<br><span class="small">Der bruges /fixtures?league=1&season=2026. Tjek API-key eller CORS, hvis listen er tom.</span></div><br>`:''; if(state.loading){$('#view').innerHTML='<div class="empty">Henter live-data fra KickoffAPI…</div>'; return;} if(state.selected) return renderDetail(); const map={overview, matches, groups, teams, stadiums, favorites, settings}; $('#view').innerHTML=(map[state.view]||overview)();}
 function matchCard(f){const id=fixtureId(f); const h=home(f), a=away(f); const fav=state.favorites.has(String(id)); return `<div class="card match" onclick="loadDetail(state.fixtures.find(x=>String(fixtureId(x))==='${id}'))"><div class="match-head"><span>${esc(get(f,'league.round')||get(f,'league.name')||'VM 2026')}</span><span class="status">${esc(status(f)||'Planlagt')}</span></div><div class="score-row"><div class="team"><img class="flag" src="${flag(h)}" onerror="this.style.display='none'">${esc(teamName(h))}</div><div class="score">${score(f)}</div><div class="team away">${esc(teamName(a))}<img class="flag" src="${flag(a)}" onerror="this.style.display='none'"></div></div><div class="match-head"><span>${dateText(f)}</span><button onclick="event.stopPropagation();toggleFav('${id}')">${fav?'★':'☆'}</button></div></div>`}
 function toggleFav(id){state.favorites.has(String(id))?state.favorites.delete(String(id)):state.favorites.add(String(id)); favSave(); render();}
-function overview(){const sorted=[...state.fixtures].sort((a,b)=>(dt(a)||0)-(dt(b)||0)); const live=sorted.filter(f=>!isFinished(f)&&status(f)&&status(f)!=='NS').slice(0,4); const next=sorted.filter(f=>(dt(f)||0)>new Date()).slice(0,6); const done=sorted.filter(isFinished).slice(-4).reverse(); return `<div class="grid"><div class="hero"><h3>VM 2026</h3><p class="muted">Lys mobilapp med rigtige KickoffAPI-kald. Ingen demodata. Ingen fake fallback.</p><div class="grid three"><div><b>${state.fixtures.length}</b><br><span class="muted small">kampe hentet</span></div><div><b>${state.teams.length}</b><br><span class="muted small">hold hentet</span></div><div><b>${state.standings.length}</b><br><span class="muted small">standing-rækker</span></div></div></div><div><div class="section-title">Live / igang</div><div class="grid two">${(live.length?live:next.slice(0,2)).map(matchCard).join('')||'<div class="card empty">Ingen kampe hentet</div>'}</div></div><div><div class="section-title">Næste kampe</div><div class="grid two">${next.map(matchCard).join('')||'<div class="card empty">Ingen kommende kampe</div>'}</div></div><div><div class="section-title">Seneste resultater</div><div class="grid two">${done.map(matchCard).join('')||'<div class="card empty">Ingen resultater endnu</div>'}</div></div></div>`}
-function matches(){const grouped={}; [...state.fixtures].sort((a,b)=>(dt(a)||0)-(dt(b)||0)).forEach(f=>{const d=dt(f); const k=d?d.toLocaleDateString('da-DK',{weekday:'long',day:'numeric',month:'long'}):'Uden dato'; (grouped[k]??=[]).push(f)}); return Object.entries(grouped).map(([d,list])=>`<div class="section-title">${d}</div><div class="grid two">${list.map(matchCard).join('')}</div>`).join('')||'<div class="empty">Ingen kampe. Tjek league-id/season.</div>'}
+function overview(){const sorted=[...state.fixtures].sort((a,b)=>(dt(a)||0)-(dt(b)||0)); const live=sorted.filter(f=>!isFinished(f)&&status(f)&&status(f)!=='NS').slice(0,4); const next=sorted.filter(f=>(dt(f)||0)>new Date()).slice(0,6); const done=sorted.filter(isFinished).slice(-4).reverse(); return `<div class="grid"><div class="hero"><h3>VM 2026</h3><p class="muted">Lys mobilapp med rigtige VM 2026-data fra KickoffAPI: league=1 og season=2026.</p><div class="grid three"><div><b>${state.fixtures.length}</b><br><span class="muted small">kampe hentet</span></div><div><b>${state.teams.length}</b><br><span class="muted small">hold hentet</span></div><div><b>${state.standings.length}</b><br><span class="muted small">standing-rækker</span></div></div></div><div><div class="section-title">Live / igang</div><div class="grid two">${(live.length?live:next.slice(0,2)).map(matchCard).join('')||'<div class="card empty">Ingen kampe hentet</div>'}</div></div><div><div class="section-title">Næste kampe</div><div class="grid two">${next.map(matchCard).join('')||'<div class="card empty">Ingen kommende kampe</div>'}</div></div><div><div class="section-title">Seneste resultater</div><div class="grid two">${done.map(matchCard).join('')||'<div class="card empty">Ingen resultater endnu</div>'}</div></div></div>`}
+function matches(){const grouped={}; [...state.fixtures].sort((a,b)=>(dt(a)||0)-(dt(b)||0)).forEach(f=>{const d=dt(f); const k=d?d.toLocaleDateString('da-DK',{weekday:'long',day:'numeric',month:'long'}):'Uden dato'; (grouped[k]??=[]).push(f)}); return Object.entries(grouped).map(([d,list])=>`<div class="section-title">${d}</div><div class="grid two">${list.map(matchCard).join('')}</div>`).join('')||'<div class="empty">Ingen kampe hentet fra /fixtures?league=1&season=2026.</div>'}
 function groups(){let rows=[]; state.standings.forEach(g=>{if(Array.isArray(g.league?.standings)) g.league.standings.flat().forEach(r=>rows.push({...r,group:r.group||g.league?.round||''})); else if(Array.isArray(g)) rows.push(...g);}); if(!rows.length) return '<div class="card empty">Ingen stillinger hentet. Standings endpoint kræver sandsynligvis korrekt league-id og season.</div>'; const groups={}; rows.forEach(r=>(groups[r.group||'Gruppe']??=[]).push(r)); return Object.entries(groups).map(([g,list])=>`<div class="card pad"><h3>${esc(g)}</h3><table class="table"><tr><th>#</th><th>Hold</th><th>P</th><th>M</th><th>V</th><th>U</th><th>T</th><th>MF</th></tr>${list.map(r=>`<tr><td>${r.rank??''}</td><td><img class="team-logo" src="${flag(r.team)}" onerror="this.style.display='none'">${esc(teamName(r.team))}</td><td><b>${r.points??''}</b></td><td>${r.all?.played??''}</td><td>${r.all?.win??''}</td><td>${r.all?.draw??''}</td><td>${r.all?.lose??''}</td><td>${r.goalsDiff??''}</td></tr>`).join('')}</table></div>`).join('<br>')}
 function teams(){return `<div class="grid three">${state.teams.map(t=>{const x=t.team||t;return `<div class="card pad"><img class="team-logo" src="${flag(x)}" onerror="this.style.display='none'"><b>${esc(teamName(x))}</b><br><span class="muted small">${esc(x.country||'')}</span></div>`}).join('')||'<div class="card empty">Ingen hold hentet.</div>'}</div>`}
 function stadiums(){return `<div class="grid two">${state.venues.slice(0,60).map(v=>{v=v.venue||v;return `<div class="card pad"><h3>${esc(v.name||'Stadion')}</h3><div class="muted">${esc(v.city||'')} ${v.capacity?'• '+v.capacity.toLocaleString('da-DK')+' pladser':''}</div></div>`}).join('')||'<div class="card empty">Ingen stadions hentet.</div>'}</div>`}
 function favorites(){const list=state.fixtures.filter(f=>state.favorites.has(String(fixtureId(f)))); return `<div class="grid two">${list.map(matchCard).join('')||'<div class="card empty">Ingen favoritter endnu.</div>'}</div>`}
-function settings(){return `<div class="card pad"><h3>API-indstillinger</h3><p class="muted">API-key er hardcoded i filen. Her kan du rette league-id/season uden at ændre kode, hvis KickoffAPI kræver det for VM.</p><label>League-id<br><input class="pill" style="width:100%" id="leagueInput" value="${esc(state.settings.leagueId||'')}" placeholder="fx VM 2026 league id"></label><br><br><label>Season<br><input class="pill" style="width:100%" id="seasonInput" value="${esc(state.settings.season||SEASON)}"></label><br><br><button class="primary" onclick="state.settings.leagueId=$('#leagueInput').value.trim();state.settings.season=$('#seasonInput').value.trim()||'2026';saveSettings();loadCore(true)">Gem og hent igen</button> <button class="ghost" onclick="localStorage.clear();location.reload()">Ryd cache helt</button></div>`}
+function settings(){return `<div class="card pad"><h3>API</h3><p><b>Base URL:</b> ${BASE}/</p><p><b>Auth header:</b> x-api-key</p><p><b>VM 2026:</b> league=${WORLD_CUP_LEAGUE_ID}, season=${SEASON}</p><p class="muted">Appen bruger kun rigtige KickoffAPI-kald. Ingen demodata. Kampdetaljer hentes med <code>/fixtures/events?fixture=ID</code>, <code>/fixtures/lineups?fixture=ID</code> og <code>/fixtures/statistics?fixture=ID</code>.</p><button class="ghost" onclick="localStorage.clear();location.reload()">Ryd cache helt</button></div>`}
 function renderDetail(){const s=state.selected, f=s.fixture, h=home(f), a=away(f); const tabs=['overview','Opstillinger','Statistik','Kampforløb']; return `<button class="ghost" onclick="state.selected=null;render()">← Tilbage</button><br><br><section class="hero"><div class="hero-main"><div class="team"><img class="flag" src="${flag(h)}" onerror="this.style.display='none'"><span>${esc(teamName(h))}</span></div><div><div class="muted small">${esc(get(f,'league.round')||'VM 2026')}</div><div class="muted small">${dateText(f)}</div><div class="score">${score(f)}</div><div class="status">${esc(status(f)||'')}</div></div><div class="team"><img class="flag" src="${flag(a)}" onerror="this.style.display='none'"><span>${esc(teamName(a))}</span></div></div><div class="tabs">${tabs.map((t,i)=>`<button class="${state.detailTab===(i?t.toLowerCase():'overview')?'active':''}" onclick="state.detailTab='${i?t.toLowerCase():'overview'}';render()">${t}</button>`).join('')}</div></section><br>${detailContent()}`}
 function detailContent(){const tab=state.detailTab, s=state.selected; if(tab==='opstillinger') return lineupsHtml(s.lineups||[]); if(tab==='statistik') return statsHtml(s.stats||[]); if(tab==='kampforløb') return eventsTimeline(s.events||[]); return `<div class="grid two"><div class="card pad"><h3>${esc(teamName(home(s.fixture)))}</h3>${eventsFor(home(s.fixture),s.events||[])}</div><div class="card pad"><h3>${esc(teamName(away(s.fixture)))}</h3>${eventsFor(away(s.fixture),s.events||[])}</div></div><br>${lineupsHtml(s.lineups||[],true)}<br>${statsHtml(s.stats||[],true)}`}
 function eventsFor(team,events){const name=teamName(team); const list=events.filter(e=>teamName(e.team)===name); return list.length?`<div class="event-list">${list.map(eventRow).join('')}</div>`:'<div class="muted">Ingen events registreret.</div>'}
