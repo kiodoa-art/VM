@@ -843,6 +843,12 @@
     if (!cached?.savedAt || !cached?.data) return false;
     const savedAt = new Date(cached.savedAt).getTime();
     if (!Number.isFinite(savedAt)) return false;
+
+    // Vigtigt: gamle cache-poster fra før next5/info-rettet version kan godt
+    // indeholde score og mål, men mangle selve endpoint-felterne for events,
+    // kort og opstillinger. De må ikke regnes som færdige detaljer.
+    if (match?.sourceType === 'kickoff' && !kickoffDetailCacheHasRequiredShape(match, cached.data)) return false;
+
     const age = Date.now() - savedAt;
 
     // Live matches and matches just around kickoff may legitimately change.
@@ -855,6 +861,28 @@
     // periodic refresh for the next five only. When opening a match manually,
     // cached data is still preferred if it exists.
     if (forAutoUpdate) return age < UPCOMING_DETAILS_CACHE_TTL_MS;
+    return true;
+  }
+
+  function kickoffDetailCacheHasRequiredShape(match, detail) {
+    if (!detail || typeof detail !== 'object') return false;
+
+    const status = detail.apiStatus || match?.apiStatus || match?.status || '';
+    const kickoff = kickoffDateForMatch(match) || kickoffDateForMatch(detail);
+    const now = Date.now();
+    const minutesToKickoff = kickoff instanceof Date && !Number.isNaN(kickoff.getTime())
+      ? (kickoff.getTime() - now) / 60000
+      : null;
+
+    const hasRecordedScore = Boolean(displayScoreFor(match) || displayScoreFor(detail));
+    const shouldHaveEvents = isLiveStatus(status) || isFinishedStatus(status) || hasRecordedScore || matchHasProbablyFinished(match);
+    const shouldHaveLineups = shouldHaveEvents || (minutesToKickoff !== null && minutesToKickoff <= 180);
+
+    // Tomme arrays er helt okay. Manglende properties betyder derimod, at
+    // detaljerne sandsynligvis er cachet af en ældre version, som aldrig hentede
+    // endpointet.
+    if (shouldHaveEvents && !Object.prototype.hasOwnProperty.call(detail, 'events')) return false;
+    if (shouldHaveLineups && !Object.prototype.hasOwnProperty.call(detail, 'lineups')) return false;
     return true;
   }
 
@@ -1331,7 +1359,7 @@
     const isPastEnoughToHaveResult = matchHasProbablyFinished(match);
     const isFinishedOrLive = isLiveStatus(status) || isFinishedStatus(status) || hasRecordedScore;
     const isLikelyUseful = isFinishedOrLive || isPastEnoughToHaveResult;
-    const lineupsMayExist = isLikelyUseful || (minutesToKickoff !== null && minutesToKickoff <= 90);
+    const lineupsMayExist = isLikelyUseful || (minutesToKickoff !== null && minutesToKickoff <= 180);
 
     const endpointCalls = [
       [`fixtures/${fixtureId}/events`, 'events', isLikelyUseful],
@@ -1344,6 +1372,9 @@
       try {
         combined[key] = await kickoffGet(endpoint);
       } catch (error) {
+        // Sæt feltet til et tomt array, så cachen ved at endpointet faktisk er
+        // forsøgt hentet. Ellers tror appen bagefter, at data aldrig er loadet.
+        combined[key] = [];
         combined.extraErrors = combined.extraErrors || [];
         combined.extraErrors.push(`${endpoint}: ${error.message}`);
       }
@@ -1605,32 +1636,56 @@
   function extractLineups(match) {
     const raw = match.lineups || match.rawDetail?.lineups;
     if (!Array.isArray(raw)) return [];
+
     const normalizePlayer = p => {
       const player = p?.player || p || {};
+      const rawName = player.name || player.playerName || player.player_name || p?.playerName || p?.name || '';
       return {
-        name: player.name || player.playerName || p?.playerName || '',
-        number: player.number || p?.number || '',
+        name: rawName,
+        number: player.number || player.shirtNumber || player.shirt_number || p?.number || p?.shirtNumber || '',
         pos: player.pos || player.position || p?.pos || p?.position || '',
         grid: player.grid || p?.grid || '',
         photo: player.photo || player.image || player.avatar || p?.photo || p?.image || ''
       };
     };
+
+    const firstArray = (...values) => values.find(Array.isArray) || [];
+
     return raw.map(item => {
-      const teamId = item.teamId || item.team?.id;
-      const team = item.team?.name || item.teamName || (String(teamId) === String(match.team1Id) ? match.team1 : String(teamId) === String(match.team2Id) ? match.team2 : '');
-      const startRaw = Array.isArray(item.startXI) ? item.startXI : (Array.isArray(item.start_xi) ? item.start_xi : []);
-      const subsRaw = Array.isArray(item.substitutes) ? item.substitutes : (Array.isArray(item.bench) ? item.bench : []);
+      const teamId = item.teamId || item.team_id || item.team?.id;
+      const team = item.team?.name || item.team?.shortName || item.teamName || item.team_name ||
+        (String(teamId) === String(match.team1Id) ? match.team1 : String(teamId) === String(match.team2Id) ? match.team2 : '');
+
+      const startRaw = firstArray(
+        item.startXI,
+        item.startXi,
+        item.start_xi,
+        item.startingXI,
+        item.startingXi,
+        item.starting_xi,
+        item.start11,
+        item.lineup,
+        item.players
+      );
+
+      const subsRaw = firstArray(
+        item.substitutes,
+        item.subs,
+        item.bench,
+        item.benchPlayers,
+        item.bench_players
+      );
+
       return {
         team,
         teamId,
-        formation: item.formation || '',
-        coach: item.coach?.name || item.coachName || '',
+        formation: item.formation || item.system || '',
+        coach: item.coach?.name || item.coachName || item.coach_name || '',
         startXI: startRaw.map(normalizePlayer).filter(p => p.name),
         substitutes: subsRaw.map(normalizePlayer).filter(p => p.name)
       };
     }).filter(item => item.team && (item.startXI.length || item.substitutes.length || item.formation));
   }
-
 
   function renderLineup(lineup) {
     return `
@@ -1687,16 +1742,33 @@
     return match.bookings
       .map(item => {
         if (!item || typeof item !== 'object') return null;
-        const rawCard = String(item.card || item.detail || item.comments || item.type || '').toUpperCase();
-        const isYellow = rawCard.includes('YELLOW');
-        const isRed = rawCard.includes('RED');
+        const rawCard = String(
+          item.card ||
+          item.detail ||
+          item.comments ||
+          item.comment ||
+          item.type ||
+          item.eventType ||
+          item.event_type ||
+          item.kind ||
+          ''
+        ).toUpperCase();
+        const isYellow = rawCard.includes('YELLOW') || rawCard.includes('GULT');
+        const isRed = rawCard.includes('RED') || rawCard.includes('RØD') || rawCard.includes('ROED');
         if (!isYellow && !isRed) return null;
-        const player = item.player?.name || item.playerName || item.name || '';
-        const team = item.team?.shortName || item.team?.name || item.teamName || '';
-        const minute = formatMinute(item.minute ?? item.time?.elapsed ?? item.time ?? item.minutes);
+
+        const player = item.player?.name || item.playerName || item.player_name || item.name || '';
+        const teamObj = item.team || null;
+        const teamId = item.team?.id || item.teamId || item.team_id || '';
+        const team = item.team?.shortName || item.team?.short_name || item.team?.name || item.teamName || item.team_name ||
+          (String(teamId) === String(match.team1Id) ? match.team1 : String(teamId) === String(match.team2Id) ? match.team2 : '');
+        const minute = formatMinute(item.minute ?? item.time?.elapsed ?? item.elapsed ?? item.time ?? item.minutes ?? item.min);
+
         return {
           minute,
           team,
+          teamId,
+          teamObj,
           player,
           card: rawCard,
           label: cardLabel(rawCard)
@@ -1720,12 +1792,19 @@
 
   function extractSubstitutions(match) {
     if (!Array.isArray(match.substitutions)) return [];
-    return match.substitutions.map(item => ({
-      minute: formatMinute(item.minute ?? item.time?.elapsed ?? item.time),
-      team: item.team?.shortName || item.team?.name || item.teamName || (String(item.teamId) === String(match.team1Id) ? match.team1 : String(item.teamId) === String(match.team2Id) ? match.team2 : ''),
-      out: item.playerOut?.name || item.assist?.name || item.assistName || '',
-      in: item.playerIn?.name || item.player?.name || item.playerName || ''
-    })).filter(item => item.in || item.out || item.team);
+    return match.substitutions.map(item => {
+      const teamObj = item.team || null;
+      const teamId = item.team?.id || item.teamId || item.team_id || '';
+      return {
+        minute: formatMinute(item.minute ?? item.time?.elapsed ?? item.elapsed ?? item.time ?? item.minutes ?? item.min),
+        teamObj,
+        teamId,
+        team: item.team?.shortName || item.team?.short_name || item.team?.name || item.teamName || item.team_name ||
+          (String(teamId) === String(match.team1Id) ? match.team1 : String(teamId) === String(match.team2Id) ? match.team2 : ''),
+        out: item.playerOut?.name || item.player_out?.name || item.assist?.name || item.assistName || item.assist_name || item.out || '',
+        in: item.playerIn?.name || item.player_in?.name || item.player?.name || item.playerName || item.player_name || item.in || ''
+      };
+    }).filter(item => item.in || item.out || item.team);
   }
 
 
