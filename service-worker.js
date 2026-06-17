@@ -1,52 +1,37 @@
-const CACHE_NAME = 'vm2026-app-v13-mobile-details-cache';
-const APP_ASSETS = [
+const CACHE_NAME = 'vm-2026-app-shell-v3';
+const APP_SHELL = [
   './',
   './index.html',
-  './style.css',
+  './app.css',
   './app.js',
+  './config.js',
   './manifest.json',
+  './icons/icon.svg',
   './icons/icon-192.png',
   './icons/icon-512.png'
 ];
 
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_ASSETS)));
+  event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL)));
   self.skipWaiting();
 });
 
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key))))
+    caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))))
   );
   self.clients.claim();
 });
 
 self.addEventListener('fetch', event => {
-  const request = event.request;
-  if (request.method !== 'GET') return;
-
-  if (request.url.includes('api.kickoffapi.com')) {
-    event.respondWith(fetch(request));
-    return;
-  }
-
-  if (request.url.includes('raw.githubusercontent.com/openfootball/worldcup.json')) {
-    event.respondWith(
-      fetch(request)
-        .then(response => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
-          return response;
-        })
-        .catch(() => caches.match(request))
-    );
-    return;
-  }
-
+  const url = new URL(event.request.url);
+  if (url.hostname.includes('kickoffapi.com') || url.pathname.startsWith('/api/')) return;
   event.respondWith(
-    caches.match(request).then(cached => cached || fetch(request).then(response => {
-      const copy = response.clone();
-      caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
+    caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
+      if (event.request.method === 'GET' && response.ok) {
+        const copy = response.clone();
+        caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
+      }
       return response;
     }).catch(() => caches.match('./index.html')))
   );
