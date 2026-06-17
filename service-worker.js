@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vm2026-app-v13-preload-details-cache';
+const CACHE_NAME = 'vm2026-app-v13-next5-info-restored-cache';
 const APP_ASSETS = [
   './',
   './index.html',

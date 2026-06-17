@@ -11,11 +11,11 @@
   }
   const DATA_URL = `${KICKOFF_BASE}/fixtures?league=${KICKOFF_LEAGUE}&season=${KICKOFF_SEASON}`;
   const OPENFOOTBALL_URL = 'https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json';
-  const CACHE_KEY = 'vm2026:data:kickoff:v13-preload-details';
+  const CACHE_KEY = 'vm2026:data:kickoff:v13-next5-cached-details';
   const RATE_LIMIT_KEY = 'vm2026:kickoffRateLimit:v1';
   const REQUEST_META_KEY = 'vm2026:kickoffRequestMeta:v1';
   const REQUEST_TIMESTAMPS_KEY = 'vm2026:kickoffRequestTimestamps:v1';
-  const MATCH_DETAILS_CACHE_KEY = 'vm2026:kickoffMatchDetails:v13-preload-details';
+  const MATCH_DETAILS_CACHE_KEY = 'vm2026:kickoffMatchDetails:v13-next5-cached-details';
   const MAX_API_CALLS_PER_MINUTE = 60;
   const MAX_API_CALLS_PER_DAY = 100000;
   const MIN_API_INTERVAL_MS = 250;
@@ -24,7 +24,11 @@
   const MANUAL_REFRESH_MIN_MS = 15 * 1000;
   const MATCH_DETAILS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
   const PRELOAD_KICKOFF_DETAILS = true;
-  const MATCH_DETAILS_PRELOAD_CONCURRENCY = 4;
+  const MATCH_DETAILS_PRELOAD_CONCURRENCY = 2;
+  const AUTO_UPDATE_MATCH_LIMIT = 5;
+  const RECENT_FINISHED_AUTO_UPDATE_MS = 6 * 60 * 60 * 1000;
+  const UPCOMING_DETAILS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+  const FINISHED_DETAILS_CACHE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
   const FAVORITE_TEAMS_KEY = 'vm2026:favTeams:v1';
   const FAVORITE_MATCHES_KEY = 'vm2026:favMatches:v1';
   const DEFAULT_TZ = 'Europe/Copenhagen';
@@ -295,7 +299,9 @@
     const awayName = teamNameFrom(away, item.team2 || item.away_name || item.awayName || item.away_team || item.away) || 'TBD';
     const fixtureId = fixture.id || item.num || item.id || item.fixtureId || item.fixture_id;
     const rawStatus = fixture.status?.short || item.statusShort || fixture.statusShort || item.status_short || fixture.status_short || item.status || fixture.status?.long;
-    const kickoffDate = fixture.date || item.date || item.utcDate || item.kickoff || item.start_time;
+    const kickoffInstant = parseKickoffApiInstant(item, fixture);
+    const kickoffIso = kickoffInstant ? kickoffInstant.toISOString() : '';
+    const kickoffDate = kickoffInstant ? dateKeyCph(kickoffInstant) : extractDatePart(fixture.date || item.date || item.utcDate || item.kickoff || item.start_time);
 
     return {
       ...item,
@@ -305,8 +311,8 @@
       team2: awayName,
       team1Id: teamIdFrom(home) || item.team1Id || item.homeTeamId || item.home_team_id || item.homeId || item.home_id || null,
       team2Id: teamIdFrom(away) || item.team2Id || item.awayTeamId || item.away_team_id || item.awayId || item.away_id || null,
-      utcDate: kickoffDate,
-      date: kickoffDate ? String(kickoffDate).slice(0, 10) : '',
+      utcDate: kickoffIso,
+      date: kickoffDate || '',
       round: kickoffRoundLabel(league.round || item.round || item.stage || item.roundName),
       group: kickoffGroupLabel(league.round || item.round || item.group || item.groupName),
       ground: [fixture.venue?.name || item.venue?.name || item.stadium, fixture.venue?.city || item.venue?.city || item.city].filter(Boolean).join(', '),
@@ -321,7 +327,7 @@
       fixtureStatistics: stats,
       lineups,
       referee: fixture.referee || item.referee || '',
-      timezone: fixture.timezone || 'UTC'
+      timezone: fixture.timezone || item.timezone || 'UTC'
     };
   }
 
@@ -582,6 +588,7 @@
     state.matches = (data.matches || []).map((match, index) => normalizeMatch(match, index));
     state.lastUpdated = lastUpdated;
     state.dataSource = source;
+    hydrateMatchesFromDetailsCache();
   }
 
   function normalizeMatch(match, index) {
@@ -747,11 +754,11 @@
     if (!PRELOAD_KICKOFF_DETAILS || !getKickoffKey()) return;
     if (!state.matches.length || !state.matches.some(match => match.sourceType === 'kickoff')) return;
 
-    const targets = state.matches.filter(match => shouldPreloadKickoffDetails(match, force));
+    const targets = getAutoUpdateDetailTargets(force);
     if (!targets.length) return;
 
     const runId = ++detailPreloadRunId;
-    toast(`Henter kampdetaljer og resultater for ${targets.length} kampe i baggrunden.`);
+    toast(`Opdaterer detaljer for de ${targets.length} næste/relevante kampe i baggrunden.`);
 
     runWithConcurrency(targets, MATCH_DETAILS_PRELOAD_CONCURRENCY, async match => {
       if (runId !== detailPreloadRunId) return;
@@ -768,29 +775,104 @@
       if (runId !== detailPreloadRunId) return;
       persistCurrentKickoffDataToCache();
       render();
-      toast('Kampdetaljer/resultater er hentet og gemt lokalt.');
+      toast('Næste kampdetaljer/resultater er opdateret og gemt lokalt.');
     }).catch(error => {
       if (runId === detailPreloadRunId) console.warn('Kickoff detail preload stoppede:', error);
     });
   }
 
+  function getAutoUpdateDetailTargets(force = false) {
+    const sorted = sortedMatches().filter(match => match.sourceType === 'kickoff');
+    return sorted
+      .filter(isAutoDetailUpdateCandidate)
+      .slice(0, AUTO_UPDATE_MATCH_LIMIT)
+      .filter(match => shouldPreloadKickoffDetails(match, force));
+  }
+
+  function isAutoDetailUpdateCandidate(match) {
+    if (!match || match.sourceType !== 'kickoff') return false;
+    if (match.status === 'live' || isLiveStatus(match.apiStatus)) return true;
+
+    const kickoff = kickoffDateForMatch(match);
+    if (!(kickoff instanceof Date) || Number.isNaN(kickoff.getTime())) return false;
+
+    const now = Date.now();
+    const matchEndEstimate = kickoff.getTime() + 150 * 60 * 1000;
+
+    // Keep freshly finished matches in the automatic update window so the final
+    // result, scorers and cards get pulled in without opening the modal.
+    if (matchEndEstimate <= now && now - matchEndEstimate <= RECENT_FINISHED_AUTO_UPDATE_MS) return true;
+
+    // Otherwise only the next upcoming matches are candidates. Older played
+    // matches are served from the per-match cache and are not polled again.
+    return kickoff.getTime() >= now - 30 * 60 * 1000;
+  }
+
   function shouldPreloadKickoffDetails(match, force = false) {
     if (!match || match.sourceType !== 'kickoff') return false;
+    if (!isAutoDetailUpdateCandidate(match)) return false;
 
     const cache = readMatchDetailsCache();
     const cached = cache[match.id];
-    if (!force && cached?.savedAt && cached?.data && matchAlreadyHasDetailData(match)) {
-      const age = Date.now() - new Date(cached.savedAt).getTime();
-      const ttl = match.status === 'live' ? LIVE_CACHE_TTL_MS : MATCH_DETAILS_CACHE_TTL_MS;
-      if (age < ttl) return false;
-    }
+    if (cachedDetailIsUsable(match, cached, { forAutoUpdate: true })) return false;
 
+    // Force only means refresh the small auto-update set. It must not fetch
+    // details for all 104 matches.
     if (force) return true;
-    if (match.status === 'live' || match.status === 'result') return true;
-    if (isLiveStatus(match.apiStatus) || isFinishedStatus(match.apiStatus)) return true;
-    if (displayScoreFor(match)) return true;
-    if (matchHasProbablyFinished(match)) return true;
-    return false;
+
+    return true;
+  }
+
+  function hydrateMatchesFromDetailsCache() {
+    if (!state.matches.length || !state.matches.some(match => match.sourceType === 'kickoff')) return;
+    const cache = readMatchDetailsCache();
+    let changed = false;
+    state.matches = state.matches.map(match => {
+      const cached = cache[match.id];
+      if (!cachedDetailIsUsable(match, cached, { forAutoUpdate: false })) return withDisplayScore(match);
+      const merged = mergeCachedDetailIntoMatch(match, cached.data);
+      changed = changed || merged !== match;
+      return merged;
+    });
+    if (changed && state.data && Array.isArray(state.data.matches)) {
+      state.data = { ...state.data, matches: state.matches };
+    }
+  }
+
+  function cachedDetailIsUsable(match, cached, { forAutoUpdate = false } = {}) {
+    if (!cached?.savedAt || !cached?.data) return false;
+    const savedAt = new Date(cached.savedAt).getTime();
+    if (!Number.isFinite(savedAt)) return false;
+    const age = Date.now() - savedAt;
+
+    // Live matches and matches just around kickoff may legitimately change.
+    if (match.status === 'live' || isLiveStatus(match.apiStatus)) return age < LIVE_CACHE_TTL_MS;
+
+    const finished = isFinishedStatus(match.apiStatus) || displayScoreFor(match) || matchHasProbablyFinished(match);
+    if (finished) return age < FINISHED_DETAILS_CACHE_TTL_MS;
+
+    // Upcoming lineups can change. For automatic background updates, allow
+    // periodic refresh for the next five only. When opening a match manually,
+    // cached data is still preferred if it exists.
+    if (forAutoUpdate) return age < UPCOMING_DETAILS_CACHE_TTL_MS;
+    return true;
+  }
+
+  function mergeCachedDetailIntoMatch(match, detail) {
+    if (!detail) return withDisplayScore(match);
+    if (match.sourceType === 'kickoff') {
+      return withDisplayScore(normalizeMatch({ ...match, ...normalizeKickoffMatch(detail), rawDetail: detail }, match.index));
+    }
+    return withDisplayScore(normalizeMatch({ ...match, ...detail }, match.index));
+  }
+
+  function kickoffDateForMatch(match) {
+    if (match?.kickoff instanceof Date) return match.kickoff;
+    if (match?.utcDate) {
+      const date = new Date(match.utcDate);
+      if (!Number.isNaN(date.getTime())) return date;
+    }
+    return parseKickoff(match?.date, match?.time);
   }
 
   function matchAlreadyHasDetailData(match) {
@@ -1167,13 +1249,8 @@
   async function fetchFootballMatchDetailsInner(match) {
     const cache = readMatchDetailsCache();
     const cached = cache[match.id];
-    if (cached?.savedAt && cached?.data) {
-      const age = Date.now() - new Date(cached.savedAt).getTime();
-      const ttl = match.status === 'live' ? LIVE_CACHE_TTL_MS : MATCH_DETAILS_CACHE_TTL_MS;
-      if (age < ttl) {
-        if (match.sourceType === 'kickoff') return withDisplayScore(normalizeMatch({ ...match, ...normalizeKickoffMatch(cached.data), rawDetail: cached.data }, match.index));
-        return normalizeMatch({ ...match, ...cached.data }, match.index);
-      }
+    if (cachedDetailIsUsable(match, cached, { forAutoUpdate: false })) {
+      return mergeCachedDetailIntoMatch(match, cached.data);
     }
 
     if (match.sourceType === 'kickoff') {
@@ -1534,7 +1611,8 @@
         name: player.name || player.playerName || p?.playerName || '',
         number: player.number || p?.number || '',
         pos: player.pos || player.position || p?.pos || p?.position || '',
-        grid: player.grid || p?.grid || ''
+        grid: player.grid || p?.grid || '',
+        photo: player.photo || player.image || player.avatar || p?.photo || p?.image || ''
       };
     };
     return raw.map(item => {
@@ -1745,7 +1823,7 @@
     const usingDefault = getKickoffKey() === DEFAULT_KICKOFF_KEY;
     return `
       <div class="data-note" style="margin-top:10px">
-        API-kald lokalt: ${minuteCalls}/8 sidste minut · ${todayCalls}/90 sidste døgn.<br>
+        API-kald lokalt: ${minuteCalls}/${MAX_API_CALLS_PER_MINUTE} sidste minut · ${todayCalls}/${MAX_API_CALLS_PER_DAY} sidste døgn.<br>
         Nøgle: ${usingDefault ? 'indbygget KickoffAPI nøgle' : 'gemt i browseren'}.
         ${meta.requestsAvailableMinute !== undefined ? `<br>API header: ${escapeHtml(String(meta.requestsAvailableMinute))} kald tilbage i minut.` : ''}
       </div>
@@ -1762,7 +1840,7 @@
         <p>Sidst opdateret: ${state.lastUpdated ? formatDateTime(new Date(state.lastUpdated)) : 'ukendt'}.</p>
         <div class="source-box">${state.dataSource.includes('KickoffAPI') ? DATA_URL : OPENFOOTBALL_URL}</div>
         ${renderApiDiagnostics()}
-        <p style="margin-top:10px">KickoffAPI bruges som primær kilde. Appen henter kampoversigt sjældent og henter først events, kort, statistik og opstillinger, når du åbner en kamp.</p>
+        <p style="margin-top:10px">KickoffAPI bruges som primær kilde. Appen viser tider i dansk tid, opdaterer automatisk kun de 5 næste/relevante kampe og genbruger gemte kampdetaljer fra denne browser.</p>
         <div class="api-key-box">
           <label for="kickoffKey">KickoffAPI nøgle</label>
           <input id="kickoffKey" type="password" placeholder="KickoffAPI key" value="${escapeAttr(getKickoffKey())}">
@@ -1851,6 +1929,81 @@
     }, {});
   }
 
+  function parseKickoffApiInstant(item, fixture = {}) {
+    const timezone = fixture.timezone || item.timezone || 'UTC';
+    const rawDate = fixture.date || item.date || item.utcDate || item.kickoff || item.start_time || item.startTime;
+    const rawTime = item.time || fixture.time || item.kickoff_time || item.startTime;
+
+    const parsed = parseApiDateTime(rawDate, rawTime, timezone);
+    if (parsed) return parsed;
+
+    const fallbackDate = extractDatePart(rawDate || item.date);
+    if (fallbackDate) return parseKickoff(fallbackDate, rawTime);
+    return null;
+  }
+
+  function parseApiDateTime(rawDate, rawTime, timezone = 'UTC') {
+    if (rawDate instanceof Date && !Number.isNaN(rawDate.getTime())) return rawDate;
+    if (typeof rawDate === 'number' && Number.isFinite(rawDate)) return new Date(rawDate > 10_000_000_000 ? rawDate : rawDate * 1000);
+    if (!rawDate) return null;
+
+    const value = String(rawDate).trim();
+    const hasExplicitZone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(value);
+    if (hasExplicitZone) {
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    const isoParts = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+    if (isoParts) {
+      const [, y, m, d, h = null, min = '00', sec = '00'] = isoParts;
+      if (h !== null) return zonedTimeToUtc(Number(y), Number(m), Number(d), Number(h), Number(min), Number(sec), timezone || 'UTC');
+      if (rawTime) {
+        const timeParts = String(rawTime).match(/(\d{1,2}):(\d{2})/);
+        if (timeParts) return zonedTimeToUtc(Number(y), Number(m), Number(d), Number(timeParts[1]), Number(timeParts[2]), 0, timezone || 'UTC');
+      }
+      return new Date(Date.UTC(Number(y), Number(m) - 1, Number(d), 12, 0, 0));
+    }
+    return null;
+  }
+
+  function extractDatePart(value) {
+    if (!value) return '';
+    const found = String(value).match(/\d{4}-\d{2}-\d{2}/);
+    return found ? found[0] : '';
+  }
+
+  function zonedTimeToUtc(year, month, day, hour = 0, minute = 0, second = 0, timeZone = 'UTC') {
+    if (!timeZone || timeZone.toUpperCase() === 'UTC') {
+      return new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+    }
+    try {
+      const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+      const offset = getTimeZoneOffsetMs(timeZone, utcGuess);
+      return new Date(utcGuess.getTime() - offset);
+    } catch {
+      return new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+    }
+  }
+
+  function getTimeZoneOffsetMs(timeZone, date) {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).formatToParts(date);
+    const get = type => parts.find(part => part.type === type)?.value;
+    let hour = Number(get('hour'));
+    if (hour === 24) hour = 0;
+    const asUtc = Date.UTC(Number(get('year')), Number(get('month')) - 1, Number(get('day')), hour, Number(get('minute')), Number(get('second')));
+    return asUtc - date.getTime();
+  }
+
   function dateKeyCph(date) {
     const parts = new Intl.DateTimeFormat('en-CA', { timeZone: DEFAULT_TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
     const get = type => parts.find(part => part.type === type)?.value;
@@ -1858,8 +2011,8 @@
   }
 
   function startOfTodayCph() {
-    const key = dateKeyCph(new Date());
-    return new Date(`${key}T00:00:00+02:00`);
+    const [year, month, day] = dateKeyCph(new Date()).split('-').map(Number);
+    return zonedTimeToUtc(year, month, day, 0, 0, 0, DEFAULT_TZ);
   }
 
   function isSameCopenhagenDate(a, b) {
@@ -1933,7 +2086,7 @@
     return escapeHtml(value);
   }
 
-  /* --- v8 UI override: structured match details + pitch lineups --- */
+  /* --- v9 UI override: mobile facts timeline + standing lineups --- */
   function renderMatchDetails(match, loadingExtra = false) {
     const goals1 = extractGoals(match, 1);
     const goals2 = extractGoals(match, 2);
@@ -1941,161 +2094,315 @@
     const substitutions = extractSubstitutions(match);
     const teamStats = extractTeamStatistics(match);
     const lineups = extractLineups(match);
-    const fields = extractAvailableMatchFields(match).filter(item => !['Resultat', 'Runde', 'Gruppe'].includes(item.label));
-    const hasEvents = goals1.length || goals2.length || bookings.length || substitutions.length;
-    const homeEvents = buildTeamEventModel(match, 1, goals1, bookings, substitutions);
-    const awayEvents = buildTeamEventModel(match, 2, goals2, bookings, substitutions);
+    const fields = buildMobileInfoFields(match);
     const displayScore = displayScoreFor(match);
+    const facts = buildMatchFacts(match, goals1, goals2, bookings, substitutions);
+    const matchKey = safeDomId(match.id || match.num || 'kamp');
 
     return `
-      <section class="match-modal match-modal-pro" role="dialog" aria-modal="true" aria-label="Kampdetaljer">
-        <button type="button" class="modal-close" data-close-modal aria-label="Luk">×</button>
+      <section class="match-modal match-modal-mobile" role="dialog" aria-modal="true" aria-label="Kampdetaljer">
+        <button type="button" class="modal-close mobile-close" data-close-modal aria-label="Luk">←</button>
 
-        <div class="match-hero-detail">
-          <div class="hero-team hero-team-home">
-            <div class="hero-flag">${flag(match.team1)}</div>
-            <strong>${escapeHtml(match.team1 || 'TBD')}</strong>
+        <header class="mobile-match-header">
+          <div class="mobile-score-line">
+            <span class="mobile-flag">${flag(match.team1)}</span>
+            <strong>${displayScore ? escapeHtml(displayScore.a) : '–'}</strong>
+            <small>${escapeHtml(match.apiStatus ? statusLabel(match.apiStatus) : match.statusDa || '')}</small>
+            <strong>${displayScore ? escapeHtml(displayScore.b) : '–'}</strong>
+            <span class="mobile-flag">${flag(match.team2)}</span>
           </div>
-          <div class="hero-score-wrap">
-            <p class="eyebrow">${escapeHtml(match.groupDa || match.roundDa || 'VM 2026')}</p>
-            <div class="modal-score big-score">${displayScore ? escapeHtml(displayScore.label) : '–'}</div>
-            <span class="match-status-chip">${escapeHtml(match.apiStatus ? statusLabel(match.apiStatus) : match.statusDa || '')}</span>
+          <div class="mobile-team-line">
+            <span>${escapeHtml(match.team1 || 'TBD')}</span>
+            <span>${escapeHtml(match.team2 || 'TBD')}</span>
           </div>
-          <div class="hero-team hero-team-away">
-            <div class="hero-flag">${flag(match.team2)}</div>
-            <strong>${escapeHtml(match.team2 || 'TBD')}</strong>
+          <div class="mobile-match-subline">
+            <span>${escapeHtml(match.roundDa || match.groupDa || 'VM 2026')}</span>
+            ${match.ground ? `<span>· ${escapeHtml(match.ground)}</span>` : ''}
           </div>
-        </div>
+        </header>
 
-        <div class="modal-meta pro-meta">
-          <span>📅 ${formatDateLong(match.kickoff) || 'Tid ukendt'}</span>
-          ${match.ground ? `<span>🏟 ${escapeHtml(match.ground)}</span>` : ''}
-          ${match.roundDa ? `<span>🏆 ${escapeHtml(match.roundDa)}</span>` : ''}
-        </div>
+        <nav class="detail-tabbar" aria-label="Kampdetaljer">
+          <a class="active" href="#facts-${matchKey}">Fakta</a>
+          ${lineups.length ? `<a href="#lineups-${matchKey}">Startopstilling</a>` : ''}
+          ${teamStats.length ? `<a href="#stats-${matchKey}">Statistik</a>` : ''}
+          <a href="#info-${matchKey}">Info</a>
+        </nav>
 
-        ${loadingExtra ? '<p class="data-note">Henter ekstra kampdata fra KickoffAPI uden at bruge unødige kald…</p>' : ''}
-        ${Array.isArray(match.rawDetail?.extraErrors) && match.rawDetail.extraErrors.length ? `<p class="data-note">Noget ekstra data manglede fra KickoffAPI: ${escapeHtml(match.rawDetail.extraErrors.join(' · '))}</p>` : ''}
+        ${loadingExtra ? '<p class="data-note mobile-note">Henter ekstra kampdata fra KickoffAPI…</p>' : ''}
+        ${Array.isArray(match.rawDetail?.extraErrors) && match.rawDetail.extraErrors.length ? `<p class="data-note mobile-note">Noget ekstra data manglede fra KickoffAPI: ${escapeHtml(match.rawDetail.extraErrors.join(' · '))}</p>` : ''}
 
-        ${hasEvents ? `
-          <div class="detail-section-title"><h3>Kampforløb</h3><p>Mål, kort og udskiftninger fordelt på hold</p></div>
-          <div class="team-event-grid">
-            ${renderTeamEventPanel(homeEvents, 'home')}
-            ${renderTeamEventPanel(awayEvents, 'away')}
-          </div>
-        ` : ''}
+        <section id="facts-${matchKey}" class="mobile-detail-section">
+          <div class="mobile-section-title"><h3>Fakta</h3><p>Kampforløb i kronologisk rækkefølge</p></div>
+          ${facts.length ? renderFactTimeline(match, facts) : emptyMobilePanel('Ingen kampforløb endnu', 'Når KickoffAPI sender mål, kort og udskiftninger, vises de her.')}
+        </section>
 
         ${lineups.length ? `
-          <div class="detail-section-title"><h3>Opstillinger</h3><p>Formation, start-11 og bænk</p></div>
-          ${renderPitchLineups(lineups, match)}
+          <section id="lineups-${matchKey}" class="mobile-detail-section">
+            <div class="mobile-section-title"><h3>Startopstilling</h3><p>Stående banevisning som i en kamp-app</p></div>
+            ${renderStandingLineups(lineups, match)}
+          </section>
         ` : ''}
 
         ${teamStats.length ? `
-          <div class="detail-section-title"><h3>Kampstatistik</h3><p>Kun statistik som findes i datakilden</p></div>
-          <div class="stats-table stats-table-pro">${renderTeamStatistics(teamStats)}</div>
+          <section id="stats-${matchKey}" class="mobile-detail-section">
+            <div class="mobile-section-title"><h3>Statistik</h3><p>Kun statistik som findes i datakilden</p></div>
+            <div class="stats-table mobile-card-panel">${renderTeamStatistics(teamStats)}</div>
+          </section>
         ` : ''}
 
-        ${fields.length ? `
-          <div class="detail-section-title"><h3>Kampinfo</h3><p>Øvrige registrerede oplysninger</p></div>
-          <div class="detail-grid detail-grid-pro">${fields.map(renderDetailBox).join('')}</div>
-        ` : ''}
+        <section id="info-${matchKey}" class="mobile-detail-section">
+          <div class="mobile-section-title"><h3>Info</h3><p>Kampdata, tidspunkt og registrerede oplysninger</p></div>
+          ${fields.length ? `<div class="detail-grid mobile-info-grid">${fields.map(renderDetailBox).join('')}</div>` : emptyMobilePanel('Ingen kampinfo endnu', 'Datakilden har ikke sendt ekstra kampinfo for denne kamp endnu.')}
+        </section>
       </section>
     `;
   }
 
-  function buildTeamEventModel(match, side, goals, bookings, substitutions) {
-    const teamName = side === 1 ? match.team1 : match.team2;
-    const teamId = side === 1 ? match.team1Id : match.team2Id;
-    const belongs = item => {
-      if (!item) return false;
-      if (item.teamObj && sameTeam(item.teamObj, teamId, teamName)) return true;
-      if (item.teamId && teamId && String(item.teamId) === String(teamId)) return true;
-      if (item.team && normalizeName(item.team) === normalizeName(teamName)) return true;
-      return false;
+  function safeDomId(value = '') {
+    return String(value).replace(/[^a-zA-Z0-9_-]/g, '-');
+  }
+
+
+  function buildMobileInfoFields(match) {
+    const fields = [];
+    const seen = new Set();
+    const add = (label, value) => {
+      if (value === undefined || value === null || value === '') return;
+      const text = String(value);
+      if (!text.trim()) return;
+      if (seen.has(label)) return;
+      seen.add(label);
+      fields.push({ label, value: text });
     };
+
+    // Info-fanen skal være den fulde kampinfo igen. Fakta-fanen er kampforløb,
+    // men Info må ikke blive reduceret til kun stadion, når der laves ny mobilvisning.
+    add('Kampstart', match.kickoff ? formatDateLong(match.kickoff) : 'Tid ukendt');
+    add('Tidszone', 'Dansk tid');
+
+    extractAvailableMatchFields(match).forEach(item => add(item.label, item.value));
+
+    add('Hjemmehold', match.team1);
+    add('Udehold', match.team2);
+    add('Datakilde', match.sourceType === 'kickoff' ? 'KickoffAPI' : match.sourceType || 'Ukendt');
+
+    return fields;
+  }
+
+  function emptyMobilePanel(title, text) {
+    return `<div class="mobile-card-panel empty-mobile-panel"><strong>${escapeHtml(title)}</strong><p>${escapeHtml(text)}</p></div>`;
+  }
+
+  function buildMatchFacts(match, goals1, goals2, bookings, substitutions) {
+    const events = [];
+    goals1.forEach(goal => events.push({ kind: 'goal', side: 'home', team: match.team1, ...goalInfo(goal) }));
+    goals2.forEach(goal => events.push({ kind: 'goal', side: 'away', team: match.team2, ...goalInfo(goal) }));
+    bookings.forEach(item => events.push({
+      kind: 'card',
+      side: sideFromTeam(match, item.teamId, item.team),
+      team: item.team,
+      minute: item.minute || '',
+      minuteValue: minuteNumber(item.minute),
+      player: item.player || 'Ukendt',
+      label: item.label || cardLabel(item.card || '')
+    }));
+    substitutions.forEach(item => events.push({
+      kind: 'sub',
+      side: sideFromTeam(match, item.teamId, item.team),
+      team: item.team,
+      minute: item.minute || '',
+      minuteValue: minuteNumber(item.minute),
+      in: item.in || 'Ind',
+      out: item.out || 'Ud'
+    }));
+
+    events.sort((a, b) => (a.minuteValue ?? 999) - (b.minuteValue ?? 999));
+
+    let homeScore = 0;
+    let awayScore = 0;
+    events.forEach(event => {
+      if (event.kind !== 'goal') return;
+      if (event.side === 'away') awayScore += 1;
+      else homeScore += 1;
+      event.score = `${homeScore} - ${awayScore}`;
+    });
+
+    return events;
+  }
+
+  function goalInfo(goal) {
+    const parsed = splitMinuteAndNote(goal.minute || '');
     return {
-      team: teamName,
-      goals,
-      bookings: bookings.filter(belongs),
-      substitutions: substitutions.filter(belongs)
+      minute: parsed.minute,
+      minuteValue: minuteNumber(parsed.minute),
+      player: goal.name || 'Ukendt',
+      note: parsed.note
     };
   }
 
-  function renderTeamEventPanel(model, sideClass) {
-    const hasGoals = model.goals.length;
-    const hasCards = model.bookings.length;
-    const hasSubs = model.substitutions.length;
+  function splitMinuteAndNote(value = '') {
+    const parts = String(value).split('·').map(part => part.trim()).filter(Boolean);
+    return { minute: parts[0] || '', note: parts.slice(1).join(' · ') };
+  }
+
+  function minuteNumber(value = '') {
+    const match = String(value).match(/\d+/);
+    return match ? Number(match[0]) : 999;
+  }
+
+  function sideFromTeam(match, teamId, teamName) {
+    if (teamId && match.team1Id && String(teamId) === String(match.team1Id)) return 'home';
+    if (teamId && match.team2Id && String(teamId) === String(match.team2Id)) return 'away';
+    if (teamName && normalizeName(teamName) === normalizeName(match.team1)) return 'home';
+    if (teamName && normalizeName(teamName) === normalizeName(match.team2)) return 'away';
+    return 'neutral';
+  }
+
+  function renderFactTimeline(match, facts) {
     return `
-      <article class="team-event-card ${sideClass}">
-        <header><span>${flag(model.team)}</span><strong>${escapeHtml(model.team || 'TBD')}</strong></header>
-        ${hasGoals ? renderEventSection('Mål', model.goals.map(goal => renderGoalEventRow(goal)).join('')) : ''}
-        ${hasCards ? renderEventSection('Kort', model.bookings.map(renderBooking).join('')) : ''}
-        ${hasSubs ? renderEventSection('Udskiftninger', model.substitutions.map(renderSubstitution).join('')) : ''}
-        ${!hasGoals && !hasCards && !hasSubs ? '<p class="muted-text compact">Ingen registrerede events for holdet.</p>' : ''}
+      <div class="facts-card">
+        ${facts.map(item => renderFactRow(match, item)).join('')}
+      </div>
+    `;
+  }
+
+  function renderFactRow(match, item) {
+    const side = item.side === 'away' ? 'away' : item.side === 'home' ? 'home' : 'neutral';
+    const minute = item.minute ? escapeHtml(item.minute) : '';
+    return `
+      <div class="fact-row ${side}">
+        <div class="fact-minute">${minute}</div>
+        <div class="fact-body">
+          ${renderFactBody(match, item)}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderFactBody(match, item) {
+    if (item.kind === 'goal') {
+      return `
+        <div class="fact-main"><span class="fact-icon">⚽</span><strong>${escapeHtml(item.player)}</strong>${item.score ? ` <em>(${escapeHtml(item.score)})</em>` : ''}</div>
+        ${item.note ? `<div class="fact-sub">${escapeHtml(item.note)}</div>` : ''}
+      `;
+    }
+    if (item.kind === 'sub') {
+      return `
+        <div class="sub-lines">
+          <span class="sub-in">↗ ${escapeHtml(item.in)}</span>
+          <span class="sub-out">↙ ${escapeHtml(item.out)}</span>
+        </div>
+      `;
+    }
+    if (item.kind === 'card') {
+      const cardIcon = String(item.label || '').toLowerCase().includes('rød') ? '🟥' : '🟨';
+      return `<div class="fact-main"><span class="fact-icon">${cardIcon}</span><strong>${escapeHtml(item.player)}</strong><small>${escapeHtml(item.label || '')}</small></div>`;
+    }
+    return `<div class="fact-main"><strong>${escapeHtml(item.label || 'Event')}</strong></div>`;
+  }
+
+  function renderStandingLineups(lineups, match) {
+    const home = pickLineup(lineups, match.team1, match.team1Id) || lineups[0];
+    const away = pickLineup(lineups, match.team2, match.team2Id) || lineups.find(l => l !== home) || lineups[1];
+    return `
+      <div class="standing-lineups">
+        ${home ? renderStandingLineup(home, 'home') : ''}
+        ${away ? renderStandingLineup(away, 'away') : ''}
+      </div>
+    `;
+  }
+
+  function renderStandingLineup(lineup, side) {
+    const rows = buildLineupRows(lineup);
+    return `
+      <article class="standing-lineup-card ${side}">
+        <header class="standing-lineup-head">
+          <strong>${flag(lineup.team)} ${escapeHtml(lineup.team)}</strong>
+          ${lineup.formation ? `<span>${escapeHtml(lineup.formation)}</span>` : ''}
+        </header>
+        <div class="standing-pitch">
+          <div class="standing-pitch-lines"></div>
+          ${rows.map((row, rowIndex) => renderStandingRow(row, rowIndex, rows.length)).join('')}
+        </div>
+        ${lineup.coach ? `<p class="lineup-coach"><strong>Træner:</strong> ${escapeHtml(lineup.coach)}</p>` : ''}
+        ${lineup.substitutes.length ? `
+          <details class="standing-bench">
+            <summary>Bænk (${lineup.substitutes.length})</summary>
+            <div>${lineup.substitutes.map(player => `<span>${player.number ? `<strong>${escapeHtml(player.number)}</strong> ` : ''}${escapeHtml(player.name)}</span>`).join('')}</div>
+          </details>
+        ` : ''}
       </article>
     `;
   }
 
-  function renderEventSection(title, rows) {
-    return `<section class="event-block"><h4>${escapeHtml(title)}</h4><div class="event-list-pro">${rows}</div></section>`;
+  function buildLineupRows(lineup) {
+    const players = (lineup.startXI || []).slice();
+    if (!players.length) return [];
+
+    const withGrid = players.filter(player => /^\d+:\d+$/.test(String(player.grid || '')));
+    if (withGrid.length >= Math.min(8, players.length)) {
+      const grouped = new Map();
+      players.forEach(player => {
+        const [rowRaw, colRaw] = String(player.grid || '9:9').split(':').map(Number);
+        const row = Number.isFinite(rowRaw) ? rowRaw : 9;
+        const col = Number.isFinite(colRaw) ? colRaw : 9;
+        if (!grouped.has(row)) grouped.set(row, []);
+        grouped.get(row).push({ ...player, gridCol: col });
+      });
+      return Array.from(grouped.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([, rowPlayers]) => rowPlayers.sort((a, b) => (a.gridCol || 0) - (b.gridCol || 0)));
+    }
+
+    const rows = rowsFromFormation(lineup.formation, players.length);
+    const ordered = players.slice().sort((a, b) => positionRank(a.pos) - positionRank(b.pos));
+    let index = 0;
+    return rows.map(count => ordered.slice(index, index += count)).filter(row => row.length);
   }
 
-  function renderGoalEventRow(goal) {
-    return `<div class="event-row"><span>⚽ ${escapeHtml(goal.name)}</span><small>${escapeHtml(goal.minute)}</small></div>`;
+  function rowsFromFormation(formation, total) {
+    const nums = String(formation || '').match(/\d+/g)?.map(Number).filter(n => n > 0) || [];
+    const wanted = nums.length ? [1, ...nums] : [1, 4, 4, Math.max(total - 9, 1)];
+    const sum = wanted.reduce((a, b) => a + b, 0);
+    if (sum === total) return wanted;
+    if (sum < total) return wanted.concat(total - sum);
+    const result = [];
+    let remaining = total;
+    for (const count of wanted) {
+      if (remaining <= 0) break;
+      const next = Math.min(count, remaining);
+      result.push(next);
+      remaining -= next;
+    }
+    return result;
   }
 
-  function extractBookings(match) {
-    if (!Array.isArray(match.bookings)) return [];
-    return match.bookings
-      .map(item => {
-        if (!item || typeof item !== 'object') return null;
-        const rawCard = String(item.card || item.detail || item.comments || item.type || '').toUpperCase();
-        const isYellow = rawCard.includes('YELLOW');
-        const isRed = rawCard.includes('RED');
-        if (!isYellow && !isRed) return null;
-        const player = item.player?.name || item.playerName || item.name || '';
-        const teamObj = item.team || null;
-        const team = item.team?.shortName || item.team?.name || item.teamName || '';
-        const teamId = item.team?.id || item.teamId || '';
-        const minute = formatMinute(item.minute ?? item.time?.elapsed ?? item.time ?? item.minutes);
-        return { minute, team, teamId, teamObj, player, card: rawCard, label: cardLabel(rawCard) };
-      })
-      .filter(Boolean);
+  function positionRank(pos = '') {
+    const value = String(pos).toUpperCase();
+    if (value.startsWith('G')) return 1;
+    if (value.startsWith('D')) return 2;
+    if (value.startsWith('M')) return 3;
+    if (value.startsWith('F') || value.startsWith('A')) return 4;
+    return 5;
   }
 
-  function extractSubstitutions(match) {
-    if (!Array.isArray(match.substitutions)) return [];
-    return match.substitutions.map(item => ({
-      minute: formatMinute(item.minute ?? item.time?.elapsed ?? item.time),
-      teamObj: item.team || null,
-      teamId: item.team?.id || item.teamId || '',
-      team: item.team?.shortName || item.team?.name || item.teamName || (String(item.teamId) === String(match.team1Id) ? match.team1 : String(item.teamId) === String(match.team2Id) ? match.team2 : ''),
-      out: item.playerOut?.name || item.player?.name || item.playerName || '',
-      in: item.playerIn?.name || item.assist?.name || item.assistName || ''
-    })).filter(item => item.in || item.out || item.team);
+  function renderStandingRow(players, rowIndex, rowCount) {
+    const y = rowCount <= 1 ? 50 : 11 + rowIndex * (78 / Math.max(rowCount - 1, 1));
+    return players.map((player, index) => {
+      const x = players.length <= 1 ? 50 : 14 + index * (72 / Math.max(players.length - 1, 1));
+      return renderStandingPlayer(player, x, y);
+    }).join('');
   }
 
-  function renderPitchLineups(lineups, match) {
-    const home = pickLineup(lineups, match.team1, match.team1Id) || lineups[0];
-    const away = pickLineup(lineups, match.team2, match.team2Id) || lineups.find(l => l !== home) || lineups[1];
+  function renderStandingPlayer(player, x, y) {
+    const meta = [player.number ? player.number : '', player.pos].filter(Boolean).join(' · ');
     return `
-      <div class="lineup-stage">
-        <div class="pitch-head">
-          ${home ? `<span>${flag(home.team)} ${escapeHtml(home.team)}${home.formation ? ` · ${escapeHtml(home.formation)}` : ''}</span>` : '<span></span>'}
-          ${away ? `<span>${away.formation ? `${escapeHtml(away.formation)} · ` : ''}${escapeHtml(away.team)} ${flag(away.team)}</span>` : '<span></span>'}
+      <div class="standing-player" style="left:${x}%; top:${y}%" title="${escapeAttr(player.name)}">
+        <div class="player-avatar">
+          ${player.photo ? `<img src="${escapeAttr(player.photo)}" alt="">` : `<span>${escapeHtml(player.number || '•')}</span>`}
         </div>
-        <div class="football-pitch">
-          <div class="pitch-markings"></div>
-          ${home ? renderPitchPlayers(home, 'home') : ''}
-          ${away ? renderPitchPlayers(away, 'away') : ''}
-        </div>
-        <div class="coach-row">
-          ${home?.coach ? `<span><strong>Træner:</strong> ${escapeHtml(home.coach)}</span>` : '<span></span>'}
-          ${away?.coach ? `<span><strong>Træner:</strong> ${escapeHtml(away.coach)}</span>` : '<span></span>'}
-        </div>
-        <div class="bench-grid">
-          ${home ? renderBench(home, 'home') : ''}
-          ${away ? renderBench(away, 'away') : ''}
-        </div>
+        <div class="player-name">${escapeHtml(shortPlayerName(player.name))}</div>
+        ${meta ? `<small>${escapeHtml(meta)}</small>` : ''}
       </div>
     `;
   }
@@ -2104,49 +2411,12 @@
     return lineups.find(l => normalizeName(l.team) === normalizeName(teamName) || (teamId && String(l.teamId) === String(teamId)));
   }
 
-  function renderPitchPlayers(lineup, side) {
-    const players = lineup.startXI.length ? lineup.startXI : [];
-    return players.map((player, index) => {
-      const pos = pitchPosition(player, index, players.length, side);
-      return `<div class="pitch-player ${side}" style="left:${pos.x}%; top:${pos.y}%" title="${escapeAttr(player.name)}">
-        <span class="shirt">${escapeHtml(player.number || '')}</span>
-        <small>${escapeHtml(shortPlayerName(player.name))}</small>
-      </div>`;
-    }).join('');
-  }
-
-  function pitchPosition(player, index, total, side) {
-    if (player.grid && /^\d+:\d+$/.test(String(player.grid))) {
-      const [rowRaw, colRaw] = String(player.grid).split(':').map(Number);
-      const row = Math.min(Math.max(rowRaw, 1), 5);
-      const col = Math.min(Math.max(colRaw, 1), 5);
-      const homeX = 8 + (row - 1) * 9.5;
-      const awayX = 92 - (row - 1) * 9.5;
-      return { x: side === 'home' ? homeX : awayX, y: 14 + (col - 1) * 18 };
-    }
-    const cols = Math.ceil(Math.sqrt(total || 11));
-    const row = Math.floor(index / cols);
-    const col = index % cols;
-    return {
-      x: side === 'home' ? 10 + row * 9 : 90 - row * 9,
-      y: 18 + col * (64 / Math.max(cols - 1, 1))
-    };
-  }
-
   function shortPlayerName(name = '') {
     const parts = String(name).trim().split(/\s+/).filter(Boolean);
     if (parts.length <= 1) return name;
     const last = parts.at(-1);
     const first = parts[0]?.[0] ? `${parts[0][0]}.` : '';
     return `${first} ${last}`.trim();
-  }
-
-  function renderBench(lineup, side) {
-    if (!lineup.substitutes.length) return '';
-    return `<div class="bench-card ${side}">
-      <h4>${flag(lineup.team)} Bænk</h4>
-      <div class="bench-list">${lineup.substitutes.map(player => `<span>${player.number ? `<strong>${escapeHtml(player.number)}</strong> ` : ''}${escapeHtml(player.name)}</span>`).join('')}</div>
-    </div>`;
   }
 
 })();
