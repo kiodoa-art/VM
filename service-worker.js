@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vm2026-app-v13-next5-events-lineups-cache';
+const CACHE_NAME = 'vm2026-app-v13-api-restored-cache';
 const APP_ASSETS = [
   './',
   './index.html',

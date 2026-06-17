@@ -11,11 +11,11 @@
   }
   const DATA_URL = `${KICKOFF_BASE}/fixtures?league=${KICKOFF_LEAGUE}&season=${KICKOFF_SEASON}`;
   const OPENFOOTBALL_URL = 'https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json';
-  const CACHE_KEY = 'vm2026:data:kickoff:v13-next5-cached-details';
+  const CACHE_KEY = 'vm2026:data:kickoff:v13-api-restored';
   const RATE_LIMIT_KEY = 'vm2026:kickoffRateLimit:v1';
   const REQUEST_META_KEY = 'vm2026:kickoffRequestMeta:v1';
   const REQUEST_TIMESTAMPS_KEY = 'vm2026:kickoffRequestTimestamps:v1';
-  const MATCH_DETAILS_CACHE_KEY = 'vm2026:kickoffMatchDetails:v13-next5-cached-details';
+  const MATCH_DETAILS_CACHE_KEY = 'vm2026:kickoffMatchDetails:v13-api-restored';
   const MAX_API_CALLS_PER_MINUTE = 60;
   const MAX_API_CALLS_PER_DAY = 100000;
   const MIN_API_INTERVAL_MS = 250;
@@ -844,11 +844,6 @@
     const savedAt = new Date(cached.savedAt).getTime();
     if (!Number.isFinite(savedAt)) return false;
 
-    // Vigtigt: gamle cache-poster fra før next5/info-rettet version kan godt
-    // indeholde score og mål, men mangle selve endpoint-felterne for events,
-    // kort og opstillinger. De må ikke regnes som færdige detaljer.
-    if (match?.sourceType === 'kickoff' && !kickoffDetailCacheHasRequiredShape(match, cached.data)) return false;
-
     const age = Date.now() - savedAt;
 
     // Live matches and matches just around kickoff may legitimately change.
@@ -861,28 +856,6 @@
     // periodic refresh for the next five only. When opening a match manually,
     // cached data is still preferred if it exists.
     if (forAutoUpdate) return age < UPCOMING_DETAILS_CACHE_TTL_MS;
-    return true;
-  }
-
-  function kickoffDetailCacheHasRequiredShape(match, detail) {
-    if (!detail || typeof detail !== 'object') return false;
-
-    const status = detail.apiStatus || match?.apiStatus || match?.status || '';
-    const kickoff = kickoffDateForMatch(match) || kickoffDateForMatch(detail);
-    const now = Date.now();
-    const minutesToKickoff = kickoff instanceof Date && !Number.isNaN(kickoff.getTime())
-      ? (kickoff.getTime() - now) / 60000
-      : null;
-
-    const hasRecordedScore = Boolean(displayScoreFor(match) || displayScoreFor(detail));
-    const shouldHaveEvents = isLiveStatus(status) || isFinishedStatus(status) || hasRecordedScore || matchHasProbablyFinished(match);
-    const shouldHaveLineups = shouldHaveEvents || (minutesToKickoff !== null && minutesToKickoff <= 180);
-
-    // Tomme arrays er helt okay. Manglende properties betyder derimod, at
-    // detaljerne sandsynligvis er cachet af en ældre version, som aldrig hentede
-    // endpointet.
-    if (shouldHaveEvents && !Object.prototype.hasOwnProperty.call(detail, 'events')) return false;
-    if (shouldHaveLineups && !Object.prototype.hasOwnProperty.call(detail, 'lineups')) return false;
     return true;
   }
 
@@ -961,14 +934,28 @@
     }));
   }
 
+  function clearKickoffLocalCaches() {
+    const prefixes = [
+      'vm2026:data:kickoff:',
+      'vm2026:kickoffMatchDetails:',
+      'vm2026:kickoffRateLimit:',
+      'vm2026:kickoffRequestMeta:',
+      'vm2026:kickoffRequestTimestamps:'
+    ];
+    Object.keys(localStorage).forEach(key => {
+      if (prefixes.some(prefix => key.startsWith(prefix))) localStorage.removeItem(key);
+    });
+    localStorage.removeItem(CACHE_KEY);
+    localStorage.removeItem(MATCH_DETAILS_CACHE_KEY);
+    localStorage.removeItem(RATE_LIMIT_KEY);
+    localStorage.removeItem(REQUEST_TIMESTAMPS_KEY);
+    localStorage.removeItem(REQUEST_META_KEY);
+  }
+
   function handleGlobalClick(event) {
     const reset = event.target.closest('[data-reset-api-cache]');
     if (reset) {
-      localStorage.removeItem(CACHE_KEY);
-      localStorage.removeItem(MATCH_DETAILS_CACHE_KEY);
-      localStorage.removeItem(RATE_LIMIT_KEY);
-      localStorage.removeItem(REQUEST_TIMESTAMPS_KEY);
-      localStorage.removeItem(REQUEST_META_KEY);
+      clearKickoffLocalCaches();
       toast('Cache og lokal rate-limit er ryddet. Henter friske data.');
       refreshData(true);
       return;
@@ -987,11 +974,7 @@
     } else {
       localStorage.removeItem(KICKOFF_KEY_STORAGE);
     }
-    localStorage.removeItem(CACHE_KEY);
-    localStorage.removeItem(MATCH_DETAILS_CACHE_KEY);
-    localStorage.removeItem(RATE_LIMIT_KEY);
-    localStorage.removeItem(REQUEST_TIMESTAMPS_KEY);
-    localStorage.removeItem(REQUEST_META_KEY);
+    clearKickoffLocalCaches();
     toast(value ? 'KickoffAPI nøgle gemt. Cache og lokal rate-limit er ryddet.' : 'API-nøgle fjernet. Bruger indbygget nøgle. Cache og lokal rate-limit er ryddet.');
     refreshData(true);
   }
@@ -1372,9 +1355,6 @@
       try {
         combined[key] = await kickoffGet(endpoint);
       } catch (error) {
-        // Sæt feltet til et tomt array, så cachen ved at endpointet faktisk er
-        // forsøgt hentet. Ellers tror appen bagefter, at data aldrig er loadet.
-        combined[key] = [];
         combined.extraErrors = combined.extraErrors || [];
         combined.extraErrors.push(`${endpoint}: ${error.message}`);
       }

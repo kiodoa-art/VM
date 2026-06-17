@@ -1,3 +1,7 @@
-# VM 2026 PWA
+VM2026 KickoffAPI v13 api-restored
 
-Rettet version med dansk tid, automatisk opdatering af de 5 næste/relevante kampe, lokal genbrug af tidligere hentede detaljer og gendannet Info-fane i kampdetaljer.
+- KickoffAPI basisforbindelse genoprettet.
+- Events, kort og lineups hentes via KickoffAPI's /fixtures/:id/events, /fixtures/:id/lineups og /fixtures/:id/statistics.
+- Kun næste/relevante 5 kampe auto-opdateres.
+- Dansk tid bruges i visning og gruppering.
+- LocalStorage/service-worker cache er bumpet, så gamle ødelagte detaljer ikke genbruges.
